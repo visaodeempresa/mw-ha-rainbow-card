@@ -53,6 +53,7 @@ const hass = {
     "sensor.cozinha_temperatura": S(31, { device_class: "temperature", unit_of_measurement: "°C", friendly_name: "Cozinha Temperatura" }),
     "sensor.cozinha_umidade": S(41, { device_class: "humidity", unit_of_measurement: "%", friendly_name: "Cozinha Umidade" }),
     "sensor.umidade_absurda": S(140, { device_class: "humidity", unit_of_measurement: "%", friendly_name: "Umidade Absurda" }),
+    "sensor.varanda_linkquality": S(203, { friendly_name: "Varanda Linkquality" }),
   },
   entities: {
     "sensor.sala_temperatura": { device_id: "dev1" },
@@ -163,6 +164,18 @@ check("rssi -62 dBm pintado pela rampa", todas.includes("rgba(253, 216, 53, 0.85
 check("lqi 108 pintado pela rampa", todas.includes("rgba(255, 152, 0, 0.85)"));
 check("bateria/rssi/lqi acham a entidade pelo dispositivo",
   todas.includes("sensor.sala_bateria") && todas.includes("sensor.sala_rssi") && todas.includes("sensor.sala_lqi"));
+
+// A descoberta é estrita: dev2 só tem temperatura e umidade. Emprestar
+// "qualquer sensor do dispositivo" faria a faixa de LQI exibir 15 — que é a
+// temperatura do quarto — como se fosse qualidade de link.
+const estrito = mk({ sections: [{ device: "dev2" }], bands: [{ metric: "lqi" }, { metric: "battery" }, { metric: "rssi" }] });
+check("dispositivo sem LQI/bateria/RSSI não empresta a temperatura",
+  !estrito.includes("sensor.quarto_temperatura") && !estrito.includes(">15<"), estrito.slice(0, 500));
+check("grandeza ausente fica cinza e sem entidade",
+  estrito.includes('data-entity=""') && estrito.includes("rgba(120, 120, 120, 0.55)"));
+// linkquality é o nome que o zigbee2mqtt usa — precisa ser reconhecido
+const z2m = mk({ sections: [{ lqi_entity: "sensor.varanda_linkquality" }], bands: [{ metric: "lqi" }] });
+check("linkquality explícito é lido", z2m.includes(">203<"), z2m.slice(0, 300));
 check("ícones das cinco grandezas", ["mdi:thermometer", "mdi:water-percent", "mdi:battery",
   "mdi:wifi", "mdi:access-point"].every((i) => todas.includes(i)));
 

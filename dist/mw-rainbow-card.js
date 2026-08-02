@@ -224,12 +224,13 @@
       scale: (a) => cached(`bat:${a}`, () => rampScale([5, 20, 40, 60, 80], [0, 100], a)),
     },
     rssi: {
-      label: "RSSI", icon: "mdi:wifi", dc: "signal_strength", hint: "_rssi",
+      label: "RSSI", icon: "mdi:wifi", dc: "signal_strength", hint: ["_rssi", "_signal_strength"],
       unit: "dBm", decimals: 0,
       scale: (a) => cached(`rssi:${a}`, () => rampScale([-90, -80, -70, -60, -50], [-120, -20], a)),
     },
     lqi: {
-      label: "LQI", icon: "mdi:access-point", dc: null, hint: "_lqi",
+      label: "LQI", icon: "mdi:access-point", dc: null,
+      hint: ["_lqi", "_linkquality", "_link_quality", "_qualidade_do_link"],
       unit: "", decimals: 0,
       scale: (a) => cached(`lqi:${a}`, () => rampScale([50, 100, 150, 200, 240], [0, 255], a)),
     },
@@ -275,21 +276,30 @@
       .sort((a, b) => a.label.localeCompare(b.label, "pt-BR"));
   };
 
-  // sensores do dispositivo que servem a uma grandeza; sem dispositivo, todos
-  const sensorsFor = (hass, devId, metric) => {
+  // Uma entidade serve à grandeza se a classe bate ou se o id termina numa das
+  // pistas. Nada de "qualquer sensor do dispositivo": um dispositivo sem LQI
+  // acabaria exibindo a temperatura dele como se fosse LQI.
+  const ownSensors = (hass, devId) => (devId && hass.entities
+    ? Object.keys(hass.entities).filter((id) => hass.entities[id].device_id === devId
+      && id.startsWith("sensor.") && hass.states[id])
+    : []);
+
+  const servesMetric = (hass, id, metric) => {
     const m = METRICS[metric] || {};
-    const own = devId && hass.entities
-      ? Object.keys(hass.entities).filter((id) => hass.entities[id].device_id === devId
-        && id.startsWith("sensor.") && hass.states[id])
-      : [];
-    const byClass = (list) => (m.dc ? list.filter((id) => hasClass(hass, id, m.dc)) : []);
-    const byHint = (list) => (m.hint ? list.filter((id) => id.endsWith(m.hint)) : []);
-    let list = byClass(own);
-    if (!list.length) list = byHint(own);
-    if (!list.length && !devId) {
-      const all = Object.keys(hass.states).filter((id) => id.startsWith("sensor."));
-      list = byClass(all);
-      if (!list.length) list = byHint(all);
+    if (m.dc && hasClass(hass, id, m.dc)) return true;
+    const hints = m.hint ? [].concat(m.hint) : [];
+    return hints.some((h) => id.endsWith(h));
+  };
+
+  // Lista para o select do editor: a do dispositivo primeiro; se ele não tem
+  // nenhuma daquela grandeza, mostra o que houver para não deixar o campo vazio
+  // — mas essa queda é só da interface, nunca da descoberta automática.
+  const sensorsFor = (hass, devId, metric) => {
+    const own = ownSensors(hass, devId);
+    let list = own.filter((id) => servesMetric(hass, id, metric));
+    if (!list.length) {
+      list = Object.keys(hass.states)
+        .filter((id) => id.startsWith("sensor.") && servesMetric(hass, id, metric));
     }
     if (!list.length) list = own.length ? own : Object.keys(hass.states).filter((id) => id.startsWith("sensor."));
     return list
@@ -297,11 +307,13 @@
       .sort((a, b) => a.label.localeCompare(b.label, "pt-BR"));
   };
 
-  // primeira entidade do dispositivo que serve à grandeza (auto-preenchimento)
+  // Descoberta automática: estrita. Sem entidade que sirva à grandeza naquele
+  // dispositivo, devolve vazio — a célula fica cinza e honesta.
   const autoEntity = (hass, devId, metric) => {
     if (!hass || !devId) return "";
-    const found = sensorsFor(hass, devId, metric)[0];
-    return found && deviceOf(hass, found.value) === devId ? found.value : "";
+    return ownSensors(hass, devId)
+      .filter((id) => servesMetric(hass, id, metric))
+      .sort()[0] || "";
   };
 
   const normSections = (raw) => (Array.isArray(raw) ? raw : []).map((s) =>
