@@ -1,0 +1,19 @@
+# O mínimo que o card aceita: uma seção, uma faixa.
+type: custom:mw-rainbow-card
+sections:
+  - temp_entity: sensor.sala_temperatura
+bands:
+  - metric: temperature
+
+# ---------------------------------------------------------------------------
+# Três ambientes, temperatura e umidade — o uso de todo dia.
+# Com `device`, o card acha sozinho os sensores de cada dispositivo.
+type: custom:mw-rainbow-card
+name: A casa inteira
+sections:
+  - device: 1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d
+  - device: 2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e
+  - device: 3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f
+bands:
+  - metric: temperature
+  - metric: humidity

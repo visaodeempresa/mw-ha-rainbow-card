@@ -1,0 +1,45 @@
+# Arco-íris vertical, de baixo para cima, com as cinco grandezas e cada faixa
+# na sua altura. Ladrilho em vez de degradê: blend desligado.
+type: custom:mw-rainbow-card
+name: Diagnóstico da malha
+orientation: vertical
+direction: btt
+length: 320
+blend: false
+divider: true
+section_labels: all
+sections:
+  - device: 1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d
+    name: Sala
+  - device: 2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e
+    name: Quarto
+  - device: 3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f
+    name: Cozinha
+    # quando a descoberta erra, aponte a entidade na mão
+    lqi_entity: sensor.cozinha_lqi
+bands:
+  - metric: temperature
+    height: 60
+  - metric: humidity
+    height: 60
+  - metric: battery
+    height: 40
+  - metric: rssi
+    height: 34
+    label: Sinal
+  - metric: lqi
+    height: 34
+    show_values: false
+
+# ---------------------------------------------------------------------------
+# Régua fina de cabeçalho: só a cor, sem número nenhum, degradê contínuo.
+type: custom:mw-rainbow-card
+sections: [1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d, 2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e]
+bands: [temperature]
+band_height: 10
+band_labels: none
+section_labels: none
+show_values: false
+padding: 0
+band_radius: 5
+shadow: false
