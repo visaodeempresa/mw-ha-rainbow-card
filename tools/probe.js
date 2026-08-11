@@ -259,6 +259,30 @@ check("seções e faixas sobrevivem ao ha-form",
   saiu[0].sections.length === 3 && saiu[0].bands.length === 2, JSON.stringify(saiu[0]));
 check("o que mudou entra no YAML", saiu[0].orientation === "vertical");
 
+/* ---- o menu do <select> não pode fechar sozinho ----
+ * Regressão: o editor refazia o painel de seções a cada hass novo. Como o HA
+ * empurra um hass a cada leitura que chega, o dono clicava no select, o menu
+ * abria e o innerHTML o levava junto no mesmo segundo. */
+const edV = new reg["mw-rainbow-card-editor"]();
+edV.hass = hass;
+edV.setConfig(base);
+let refeito = 0;
+Object.defineProperty(edV._secEl, "innerHTML", { set() { refeito += 1; }, get() { return ""; } });
+
+const leituraNova = { ...hass, states: { ...hass.states, "sensor.sala_temperatura": S(24.1, { device_class: "temperature", unit_of_measurement: "°C", friendly_name: "Sala Temperatura" }) } };
+edV.hass = leituraNova;
+check("leitura nova não refaz os selects do editor", refeito === 0);
+edV.setConfig(base);
+check("o mesmo config de volta não refaz os selects", refeito === 0);
+edV.hass = { ...hass, devices: { ...hass.devices, dev4: { name: "Sensor novo" } } };
+check("dispositivo novo no registro refaz os selects", refeito === 1, `refeito=${refeito}`);
+edV._busy = () => true; // menu aberto / campo em edição
+edV.hass = { ...hass, areas: { ...hass.areas } };
+check("com o campo em uso a pintura fica pendente", refeito === 1, `refeito=${refeito}`);
+edV._busy = () => false;
+edV._flush();
+check("saindo do campo, a pintura pendente sai", refeito === 2, `refeito=${refeito}`);
+
 const edStub = reg["mw-rainbow-card"].getStubConfig(hass);
 check("stub cria uma seção por dispositivo de clima",
   edStub.sections.length === 3 && edStub.bands.length === 2, JSON.stringify(edStub));

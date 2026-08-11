@@ -1,0 +1,55 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>bancada mw-rainbow-card editor</title>
+<style>body{font:14px system-ui;padding:16px;background:#111;color:#eee}#log{white-space:pre;margin-top:16px}</style>
+<h3>Bancada — o &lt;select&gt; sobrevive à enxurrada de hass?</h3>
+<div id="host"></div>
+<div id="log"></div>
+<script src="../dist/mw-rainbow-card.js"></script>
+<script>
+const S = (state, attrs) => ({ state: String(state), attributes: attrs });
+const mkHass = (t) => ({
+  states: {
+    "sensor.sala_temperatura": S(t, { device_class: "temperature", unit_of_measurement: "°C", friendly_name: "Sala Temperatura" }),
+    "sensor.sala_umidade": S(58, { device_class: "humidity", unit_of_measurement: "%", friendly_name: "Sala Umidade" }),
+    "sensor.quarto_temperatura": S(21, { device_class: "temperature", unit_of_measurement: "°C", friendly_name: "Quarto Temperatura" }),
+    "sensor.quarto_umidade": S(70, { device_class: "humidity", unit_of_measurement: "%", friendly_name: "Quarto Umidade" }),
+  },
+  entities: ENT, devices: DEV, areas: AREAS, locale: { language: "pt-BR" }, callService(){},
+});
+const ENT = {
+  "sensor.sala_temperatura": { device_id: "dev1" }, "sensor.sala_umidade": { device_id: "dev1" },
+  "sensor.quarto_temperatura": { device_id: "dev2" }, "sensor.quarto_umidade": { device_id: "dev2" },
+};
+const DEV = { dev1: { name: "Sensor da sala", area_id: "a1" }, dev2: { name: "Sensor do quarto" } };
+const AREAS = { a1: { name: "Sala" } };
+
+const ed = document.createElement("mw-rainbow-card-editor");
+document.getElementById("host").appendChild(ed);
+ed.hass = mkHass(23.4);
+ed.setConfig({ sections: [{ device: "dev1" }, { device: "dev2" }], bands: [{ metric: "temperature" }] });
+
+window.bancada = async () => {
+  const out = [];
+  const sel = ed.querySelector('select[data-field="device"]');
+  out.push("select encontrado: " + !!sel);
+  sel.focus();                                   // é o que o clique faz antes de abrir o menu
+  out.push("select com foco: " + (ed.getRootNode().activeElement === sel || document.activeElement === sel));
+  for (let i = 0; i < 25; i++) ed.hass = mkHass(20 + i / 10);   // enxurrada de leituras
+  out.push("select AINDA no DOM depois de 25 hass: " + sel.isConnected);
+  out.push("mesmo nó (não foi recriado): " + (ed.querySelector('select[data-field="device"]') === sel));
+  sel.blur();
+  await new Promise(r => setTimeout(r, 30));
+  out.push("depois do blur, painel intacto: " + !!ed.querySelector('select[data-field="device"]'));
+  // registro novo com o campo livre: aí sim pode repintar
+  const novo = mkHass(22);
+  novo.devices = { ...DEV, dev3: { name: "Sensor da cozinha" } };
+  novo.entities = { ...ENT, "sensor.cozinha_temperatura": { device_id: "dev3" } };
+  novo.states = { ...novo.states, "sensor.cozinha_temperatura": S(28, { device_class: "temperature", unit_of_measurement: "°C", friendly_name: "Cozinha Temperatura" }) };
+  ed.hass = novo;
+  const sel2 = ed.querySelector('select[data-field="device"]');
+  out.push("registro novo entrou na lista: " + [...sel2.options].some(o => o.textContent.includes("cozinha")));
+  document.getElementById("log").textContent = out.join("\n");
+  return out.join("\n");
+};
+</script>
