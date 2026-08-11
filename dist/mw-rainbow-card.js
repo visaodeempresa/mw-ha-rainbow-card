@@ -316,6 +316,14 @@
       .sort()[0] || "";
   };
 
+  // O HA troca o objeto hass a cada leitura que chega, mas mantém as mesmas
+  // referências de registro. As listas do editor só mudam quando o registro
+  // muda — é isso que separa "chegou uma temperatura nova" de "nasceu um
+  // dispositivo novo".
+  const sameRegistry = (a, b) => !!a && !!b
+    && a.entities === b.entities && a.devices === b.devices && a.areas === b.areas
+    && Object.keys(a.states || {}).length === Object.keys(b.states || {}).length;
+
   const normSections = (raw) => (Array.isArray(raw) ? raw : []).map((s) =>
     (typeof s === "string" ? { device: s } : { ...(s || {}) }));
 
@@ -690,13 +698,70 @@
       this._config = { ...config };
       this._config.sections = normSections(config.sections);
       this._config.bands = normBands(config.bands);
-      this._renderAll();
+      this._watchFocus();
+      this._paint("sections", "bands", "form", "colors");
     }
 
     set hass(hass) {
+      const antes = this._hass;
       this._hass = hass;
-      if (this._form) { this._form.hass = hass; this._form.schema = this._schema(); }
-      if (this._secEl) this._renderSections();
+      if (this._form) this._form.hass = hass;
+      if (!this._secEl) return;
+      // Refazer os <select> a cada leitura que chega fechava o menu na mão do
+      // dono: o hass novo chega várias vezes por segundo e o innerHTML levava
+      // junto o campo aberto. Só o registro muda as opções.
+      if (sameRegistry(antes, hass)) return;
+      this._sigSec = null;
+      this._paint("sections");
+    }
+
+    /* ---- pintura: porta única para o DOM, e ela respeita quem está mexendo ---- */
+
+    _paint(...oque) {
+      this._todo = this._todo || new Set();
+      for (const o of oque) this._todo.add(o);
+      if (this._busy()) return; // fica pendente e sai no focusout
+      this._flush();
+    }
+
+    _flush() {
+      const todo = this._todo || new Set();
+      this._todo = new Set();
+      if (todo.has("sections")) this._paintSections();
+      if (todo.has("bands")) this._paintBands();
+      if (todo.has("form")) this._paintForm();
+      if (todo.has("colors")) this._paintColors();
+    }
+
+    // o elemento com foco dentro deste editor — getRootNode() atravessa o shadow
+    // root do diálogo, onde document.activeElement só devolve o hospedeiro
+    _focused() {
+      const root = this.getRootNode ? this.getRootNode() : null;
+      const el = root && root.activeElement;
+      return el && this.contains && this.contains(el) ? el : null;
+    }
+
+    // menu de <select> aberto ou campo sendo digitado: não mexer no DOM agora
+    _busy() {
+      const el = this._focused();
+      return !!el && (el.tagName === "SELECT" || el.tagName === "INPUT");
+    }
+
+    _watchFocus() {
+      if (this._watching) return;
+      this._watching = true;
+      this.addEventListener("focusout", () => {
+        // o foco só assenta no tique seguinte — sem a espera, pular de um campo
+        // para o vizinho passaria por "editor ocioso"
+        setTimeout(() => { if (!this._busy()) this._flush(); }, 0);
+      });
+    }
+
+    // o DOM já mostra o que o usuário acabou de escolher — marcar como pintado
+    // evita uma reconstrução inútil quando o config voltar pelo setConfig
+    _seal() {
+      this._sigSec = JSON.stringify(this._config.sections || []);
+      this._sigBand = JSON.stringify(this._config.bands || []);
     }
 
     _emit() {
@@ -757,16 +822,12 @@
       ];
     }
 
-    _renderAll() {
-      this._renderSections();
-      this._renderBands();
-      this._renderForm();
-      this._renderColors();
-    }
-
     /* ---- seções: uma por dispositivo, com as entidades por grandeza ---- */
 
-    _renderSections() {
+    _paintSections() {
+      const sig = JSON.stringify(this._config.sections || []);
+      if (this._secEl && sig === this._sigSec) return; // nada mudou: não mexer
+      this._sigSec = sig;
       if (!this._secEl) {
         this._secEl = document.createElement("details");
         this._secEl.open = true;
@@ -803,11 +864,14 @@
           <details class="adv"><summary>entidades desta seção</summary><div class="ents">${extras}</div></details>
         </div>`;
       }).join("");
+      // o que estava aberto continua aberto depois da reconstrução
+      const abertos = Array.from(this._secEl.querySelectorAll("details.adv")).map((d) => d.open);
       this._secEl.innerHTML = `
         <summary>Seções (${secs.length}) — cada seção é um dispositivo</summary>
         <style>${editorCss}</style>
         ${rows}
         <button class="add" data-add-sec="1">+ adicionar seção</button>`;
+      this._secEl.querySelectorAll("details.adv").forEach((d, i) => { d.open = !!abertos[i]; });
       this._secEl.querySelectorAll("select[data-sec], input[data-sec]").forEach((el) => {
         const ev = el.tagName === "INPUT" ? "change" : "change";
         el.addEventListener(ev, () => {
@@ -825,7 +889,10 @@
           }
           this._config = { ...this._config, sections: secs2 };
           this._emit();
-          this._renderSections();
+          this._seal();
+          // só a troca de dispositivo muda as listas de entidades; repintar por
+          // um nome digitado tiraria o foco do campo à toa
+          if (field === "device") { this._sigSec = null; this._paint("sections"); }
         });
       });
       this._secEl.querySelectorAll("button[data-up],button[data-down],button[data-del],button[data-add-sec]")
@@ -844,13 +911,16 @@
           if (!secs2.length) secs2.push({});
           this._config = { ...this._config, sections: secs2 };
           this._emit();
-          this._renderSections();
+          this._paint("sections");
         }));
     }
 
     /* ---- faixas: grandeza + altura ---- */
 
-    _renderBands() {
+    _paintBands() {
+      const sig = JSON.stringify(this._config.bands || []);
+      if (this._bandEl && sig === this._sigBand) return;
+      this._sigBand = sig;
       if (!this._bandEl) {
         this._bandEl = document.createElement("details");
         this._bandEl.open = true;
@@ -885,7 +955,7 @@
           else bands2[i][el.dataset.field] = el.dataset.field === "height" ? Number(v) : v;
           this._config = { ...this._config, bands: bands2 };
           this._emit();
-          this._renderBands();
+          this._seal(); // a linha já mostra a escolha — repintar só fecharia o menu
         });
       });
       this._bandEl.querySelectorAll("button[data-bup],button[data-bdown],button[data-bdel],button[data-add-band]")
@@ -907,11 +977,11 @@
           if (!bands2.length) bands2.push({ metric: "temperature" });
           this._config = { ...this._config, bands: bands2 };
           this._emit();
-          this._renderBands();
+          this._paint("bands");
         }));
     }
 
-    _renderForm() {
+    _paintForm() {
       if (!this._form) {
         this._form = document.createElement("ha-form");
         this._form.computeLabel = (f) => LABELS[f.name] || f.name;
@@ -919,7 +989,9 @@
         this.appendChild(this._form);
       }
       this._form.hass = this._hass;
-      this._form.schema = this._schema();
+      // esquema novo = campos refeitos pelo lit; só quando ele realmente muda
+      const sigEsq = `${this._config.orientation}|${this._config.blend}`;
+      if (sigEsq !== this._sigEsq) { this._sigEsq = sigEsq; this._form.schema = this._schema(); }
       const data = { ...DEFAULTS, ...this._config };
       delete data.sections;
       delete data.bands;
@@ -927,7 +999,10 @@
       this._form.data = data;
     }
 
-    _renderColors() {
+    _paintColors() {
+      const sig = JSON.stringify(COLOR_FIELDS.map((n) => this._config[n] ?? null));
+      if (this._colorsEl && sig === this._sigCor) return;
+      this._sigCor = sig;
       if (!this._colorsEl) {
         this._colorsEl = document.createElement("details");
         this._colorsEl.style.cssText = panelCss;
@@ -957,6 +1032,7 @@
           if (value === DEFAULTS[name]) delete clean[name]; else clean[name] = value;
           this._config = clean;
           rowEl.querySelector("code").textContent = clean[name] || "—";
+          this._sigCor = JSON.stringify(COLOR_FIELDS.map((n) => clean[n] ?? null));
           this._emit();
         };
         rowEl.querySelector("input[type=color]").addEventListener("input", apply);
@@ -982,7 +1058,7 @@
       }
       this._config = clean;
       this._emit();
-      this._renderForm();
+      this._paint("form");
     }
   }
 
