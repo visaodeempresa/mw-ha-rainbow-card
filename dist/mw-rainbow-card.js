@@ -52,9 +52,13 @@
     border_radius: 10,
     padding: 8,
     gradient: true,            // brilho de vidro sobre as faixas
-    shadow: true,
-    lift: false,
     divider: false,            // risco separando as seções
+    // --- papel e relevo ---
+    // O card nasce com o fundo do tema (paper_color: none) — quem já tinha um
+    // arco-íris na tela não acorda com uma folha nova por baixo dele.
+    paper_color: "none",       // none | paper | <matiz>-<1..7>
+    paper_dark: false,         // a mesma chave, lida na rampa de noite
+    depth: "soft",             // flat | soft | 3d — substitui shadow/lift
     // --- ações ---
     tap_action: "auto",        // auto = cada célula abre o seu sensor
     hold_action: "none",
@@ -73,6 +77,122 @@
   };
 
   const num = (v, fb) => (Number.isFinite(Number(v)) ? Number(v) : fb);
+
+  /* ------------------------------ papel ------------------------------ */
+
+  // A folha por baixo do arco-íris. Mesmo vocabulário do MW Power Button e do
+  // MW Window / Curtain: uma chave de papel (`paper` + 49 tons), a rampa de
+  // noite no mesmo jogo de chaves, e o relevo em três degraus.
+
+  // >>> paper-palette v1 — fonte canônica: /Volumes/SSD-T1-01/CLAUDE-SSD/IA/lib/paper-palette/paper-palette.js
+  // 49 papéis encardidos: 7 matizes do arco-íris × 7 tons (1 = quase branco,
+  // 7 = mais encardido). Saturação baixa de propósito — papel descansa a vista.
+  const PAPER_HUES = [
+    ["red", "Vermelho", 6], ["orange", "Laranja", 27], ["yellow", "Amarelo", 47],
+    ["green", "Verde", 96], ["blue", "Azul", 203], ["indigo", "Anil", 236],
+    ["violet", "Violeta", 283],
+  ];
+  const PAPER_TONES = [[97, 6], [96, 9], [94, 12], [92, 15], [90, 18], [88, 21], [85, 24]];
+  const PAPER_DEFAULT = "linear-gradient(145deg, #fdfaf3, #e8e3d8)";
+  const paperGradient = (key) => {
+    const m = /^([a-z]+)-([1-7])$/.exec(String(key || "").trim());
+    if (!m) return PAPER_DEFAULT;
+    const hue = PAPER_HUES.find((h) => h[0] === m[1]);
+    if (!hue) return PAPER_DEFAULT;
+    const [l, s] = PAPER_TONES[+m[2] - 1];
+    return `linear-gradient(145deg, hsl(${hue[2]}, ${s}%, ${l}%), hsl(${hue[2]}, ${s + 4}%, ${l - 7}%))`;
+  };
+  const paperOptions = () => [{ value: "paper", label: "Papel original (creme)" }].concat(
+    ...PAPER_HUES.map((h) => PAPER_TONES.map((t, i) => ({
+      value: `${h[0]}-${i + 1}`,
+      label: `${h[1]} · tom ${i + 1}${i === 0 ? " (mais claro)" : i === 6 ? " (mais encardido)" : ""}`,
+    }))));
+  // <<< paper-palette v1
+
+  // >>> paper-dark-palette v1 — fonte canônica: /Volumes/SSD-T1-01/CLAUDE-SSD/IA/lib/paper-dark-palette/paper-dark-palette.js
+  // 49 papéis de noite: as mesmas 7 matizes do paper-palette v1 × 7 tons
+  // (1 = papel escuro mais claro, 7 = mais encardido). A saturação sobe mais
+  // rápido que na rampa clara porque matiz em luminosidade baixa desaparece.
+  const PAPER_DARK_HUES = [
+    ["red", "Vermelho", 6], ["orange", "Laranja", 27], ["yellow", "Amarelo", 47],
+    ["green", "Verde", 96], ["blue", "Azul", 203], ["indigo", "Anil", 236],
+    ["violet", "Violeta", 283],
+  ];
+  const PAPER_DARK_TONES = [[26, 10], [24, 13], [21, 16], [19, 19], [16, 22], [14, 25], [11, 28]];
+  const PAPER_DARK_DEFAULT = "linear-gradient(145deg, #2b2825, #161411)";
+  const paperDarkGradient = (key) => {
+    const m = /^([a-z]+)-([1-7])$/.exec(String(key || "").trim());
+    if (!m) return PAPER_DARK_DEFAULT;
+    const hue = PAPER_DARK_HUES.find((h) => h[0] === m[1]);
+    if (!hue) return PAPER_DARK_DEFAULT;
+    const [l, s] = PAPER_DARK_TONES[+m[2] - 1];
+    return `linear-gradient(145deg, hsl(${hue[2]}, ${s}%, ${l}%), hsl(${hue[2]}, ${s + 6}%, ${Math.max(4, l - 6)}%))`;
+  };
+  const paperDarkOptions = () => [{ value: "paper", label: "Papel de noite (grafite)" }].concat(
+    ...PAPER_DARK_HUES.map((h) => PAPER_DARK_TONES.map((t, i) => ({
+      value: `${h[0]}-${i + 1}`,
+      label: `${h[1]} · tom ${i + 1}${i === 0 ? " (mais claro)" : i === 6 ? " (mais escuro)" : ""}`,
+    }))));
+  // Tinta que se lê sobre o papel do modo pedido. Não é contraste calculado:
+  // é o par fixo que a casa usa, para dois cards lado a lado combinarem.
+  const paperInk = (dark) => (dark
+    ? { text: "rgba(247, 244, 236, 0.94)", dim: "rgba(247, 244, 236, 0.62)", line: "rgba(255, 255, 255, 0.14)" }
+    : { text: "rgba(28, 25, 20, 0.92)", dim: "rgba(28, 25, 20, 0.58)", line: "rgba(0, 0, 0, 0.14)" });
+  // <<< paper-dark-palette v1
+
+  // A borda do papel: uma linha tirada do próprio tom, não uma cor inventada.
+  // Cópia local (não é bloco canônico) — o mesmo cálculo do
+  // mw-ha-window-curtain-card, que foi onde ele nasceu.
+  const paperEdge = (key, dark) => {
+    const m = /^([a-z]+)-([1-7])$/.exec(String(key || "").trim());
+    const table = dark ? PAPER_DARK_TONES : PAPER_TONES;
+    if (!m) return dark ? "rgba(255,255,255,0.22)" : "rgba(0,0,0,0.20)";
+    const hue = (dark ? PAPER_DARK_HUES : PAPER_HUES).find((h) => h[0] === m[1]);
+    if (!hue) return dark ? "rgba(255,255,255,0.22)" : "rgba(0,0,0,0.20)";
+    const [l, s] = table[+m[2] - 1];
+    return dark
+      ? `hsl(${hue[2]}, ${Math.min(60, s + 14)}%, ${Math.min(72, l + 26)}%)`
+      : `hsl(${hue[2]}, ${Math.min(60, s + 10)}%, ${Math.max(30, l - 26)}%)`;
+  };
+
+  const hasPaper = (c) => !!c.paper_color && c.paper_color !== "none";
+  const paperOf = (c) => (c.paper_dark === true
+    ? paperDarkGradient(c.paper_color) : paperGradient(c.paper_color));
+
+  // O relevo. `flat` = nada · `soft` = a sombra de sempre · `3d` = o papel do
+  // MW Power Button ligado: luz presa na quina de cima e sombra na de baixo,
+  // com a folha projetando no dashboard. Os números do modo claro são os do
+  // botão de tomada; os do escuro seguem a leitura do papel de noite, onde
+  // 0,90 de branco vira risco de giz em vez de luz.
+  const cardRelief = (depth, dark) => {
+    if (depth === "flat") return "none";
+    if (depth !== "3d") return "0 2px 3px rgba(0,0,0,0.18), 0 6px 12px rgba(0,0,0,0.14)";
+    return `inset 4px 4px 8px rgba(255,252,240,${dark ? "0.10" : "0.90"}),`
+      + ` inset -4px -4px 8px rgba(0,0,0,${dark ? "0.50" : "0.12"}),`
+      + ` 0 2px 6px rgba(0,0,0,${dark ? "0.55" : "0.18"}),`
+      + ` 0 6px 16px rgba(0,0,0,${dark ? "0.42" : "0.14"}),`
+      + ` 0 12px 28px rgba(0,0,0,${dark ? "0.30" : "0.08"})`;
+  };
+
+  // A faixa é o oposto da folha: ela AFUNDA no papel. Sem isso o arco-íris
+  // fica boiando em cima de uma folha em relevo — duas coisas salientes, e o
+  // olho não sabe qual está por cima de qual.
+  const stripRelief = (depth, dark) => {
+    if (depth === "flat") return "none";
+    if (depth !== "3d") return "inset 1px 1px 0 rgba(255,255,255,0.24), inset -1px -1px 0 rgba(0,0,0,0.12)";
+    return `inset 2px 2px 5px rgba(0,0,0,${dark ? "0.55" : "0.30"}),`
+      + ` inset -1px -1px 3px rgba(255,255,255,${dark ? "0.05" : "0.45"}),`
+      + ` 0 1px 0 rgba(255,255,255,${dark ? "0.06" : "0.55"})`;
+  };
+
+  // shadow/lift viraram um controle só. YAML antigo continua valendo — é
+  // traduzido aqui, uma vez, em vez de o render carregar os dois vocabulários.
+  const migrateDepth = (cfg) => {
+    if (cfg.depth) return cfg;
+    if (cfg.shadow === false) return { ...cfg, depth: "flat" };
+    if (cfg.lift === true) return { ...cfg, depth: "3d" };
+    return cfg;
+  };
 
   /* --------------------------- escala canônica --------------------------- */
 
@@ -347,7 +467,7 @@
         throw new Error("mw-rainbow-card: informe ao menos uma faixa em 'bands'");
       }
       this._user = { ...config };
-      this._config = { ...DEFAULTS, ...config, sections, bands };
+      this._config = { ...DEFAULTS, ...migrateDepth(config || {}), sections, bands };
       this._key = null;
       if (this._hass) this._render();
     }
@@ -498,20 +618,36 @@
         </div>`;
       }).join("");
 
-      const shadow = c.shadow === false ? "none"
-        : `0 2px 3px rgba(0,0,0,0.18), 0 6px 12px rgba(0,0,0,0.14)`;
-      const stripShadow = c.shadow === false ? "none"
-        : `inset 1px 1px 0 rgba(255,255,255,0.24), inset -1px -1px 0 rgba(0,0,0,0.12)`;
+      // --- a folha e o relevo ---
+      const dark = c.paper_dark === true;
+      const paper = hasPaper(c);
+      const ink = paperInk(dark);
+      const depth = c.depth || DEFAULTS.depth;
+      // `paper_dark` manda no relevo mesmo sem papel: quem escolhe o tom da luz
+      // é o fundo, e sem folha o fundo é o cartão do tema. Branco a 0,90 num
+      // tema escuro não é luz, é giz.
+      const shadow = cardRelief(depth, dark);
+      const stripShadow = stripRelief(depth, dark);
+      // Sem papel o card é o card do tema: fundo e borda ficam com quem sempre
+      // mandou neles. Escrever "transparent" aqui apagaria o cartão do tema.
+      const cardBg = paper ? `background:${paperOf(c)};` : "";
+      const cardBorder = paper ? `border:1px solid ${paperEdge(c.paper_color, dark)};` : "";
+      // A tinta só entra quando o dono não escolheu a dele: papel claro em tema
+      // escuro deixaria o nome do card branco sobre creme.
+      const nameColor = paper && c.color_name === DEFAULTS.color_name ? ink.text : c.color_name;
+      const bandLabelColor = paper && c.color_band_label === DEFAULTS.color_band_label
+        ? ink.dim : c.color_band_label;
 
       if (!this.shadowRoot) this.attachShadow({ mode: "open" });
       this.shadowRoot.innerHTML = `
         <style>
           ha-card{box-sizing:border-box;padding:${px(c.padding) || "8px"};
             border-radius:${px(c.border_radius) || "10px"};
-            transform:${c.lift === false ? "none" : "translateY(-1px)"};
+            ${cardBg}${cardBorder}
+            transform:${depth === "3d" ? "translateY(-1px)" : "none"};
             box-shadow:${shadow};overflow:hidden;
             -webkit-tap-highlight-color:transparent;touch-action:manipulation;user-select:none;}
-          .nm{font-size:${px(c.name_size) || "12px"};color:${esc(c.color_name)};
+          .nm{font-size:${px(c.name_size) || "12px"};color:${esc(nameColor)};
             font-weight:600;line-height:1.2;padding-bottom:4px;text-align:center;}
           .bands{display:flex;gap:${px(c.band_gap) || "4px"};
             flex-direction:${vertical ? "row" : "column"};
@@ -520,7 +656,7 @@
             flex-direction:${vertical ? "column" : "row"};
             ${vertical ? "width:var(--bh);flex:0 0 var(--bh);" : "height:var(--bh);"}}
           .gut{flex:0 0 auto;display:flex;align-items:center;justify-content:center;
-            color:${esc(c.color_band_label)};font-size:${px(c.band_label_size) || "14px"};
+            color:${esc(bandLabelColor)};font-size:${px(c.band_label_size) || "14px"};
             ${vertical ? "" : `min-width:${px(c.band_label_size) || "14px"};`}}
           .gut ha-icon{--mdc-icon-size:${px(c.band_label_size) || "14px"};
             width:${px(c.band_label_size) || "14px"};height:${px(c.band_label_size) || "14px"};display:flex;}
@@ -641,9 +777,10 @@
     border_radius: "Arredondamento do card",
     padding: "Folga interna",
     gradient: "Brilho de vidro nas faixas",
-    shadow: "Sombra em relevo",
-    lift: "Card levemente levantado",
     divider: "Risco separando as seções",
+    paper_color: "Cor do papel",
+    paper_dark: "Papel de noite (e o relevo lido no escuro)",
+    depth: "Relevo",
     tap_action: "Toque",
     hold_action: "Toque longo",
     double_tap_action: "Toque duplo",
@@ -679,6 +816,13 @@
     { value: "icon", label: "Ícone da grandeza" },
     { value: "text", label: "Nome da grandeza" },
     { value: "none", label: "Nada" },
+  ];
+  const PAPERS = (dark) => [{ value: "none", label: "Fundo do tema (sem papel)" }]
+    .concat(dark ? paperDarkOptions() : paperOptions());
+  const DEPTHS = [
+    { value: "soft", label: "Suave (sombra de sempre)" },
+    { value: "3d", label: "3D (relevo de papel)" },
+    { value: "flat", label: "Chapado (sem sombra)" },
   ];
   const TEXT_MODES = [
     { value: "auto", label: "Contraste com a faixa (automático)" },
@@ -789,10 +933,15 @@
             { name: "band_radius", selector: n(0, 60, "px") },
             { name: "border_radius", selector: n(0, 60, "px") },
             { name: "padding", selector: n(0, 40, "px") },
-            { name: "gradient", selector: { boolean: {} } },
-            { name: "shadow", selector: { boolean: {} } },
-            { name: "lift", selector: { boolean: {} } },
             { name: "divider", selector: { boolean: {} } },
+          ],
+        },
+        {
+          name: "", type: "expandable", title: "Papel e relevo", schema: [
+            { name: "paper_color", selector: sel(PAPERS(cfg.paper_dark === true)) },
+            { name: "paper_dark", selector: { boolean: {} } },
+            { name: "depth", selector: sel(DEPTHS) },
+            { name: "gradient", selector: { boolean: {} } },
           ],
         },
         {
@@ -990,7 +1139,7 @@
       }
       this._form.hass = this._hass;
       // esquema novo = campos refeitos pelo lit; só quando ele realmente muda
-      const sigEsq = `${this._config.orientation}|${this._config.blend}`;
+      const sigEsq = `${this._config.orientation}|${this._config.blend}|${this._config.paper_dark}`;
       if (sigEsq !== this._sigEsq) { this._sigEsq = sigEsq; this._form.schema = this._schema(); }
       const data = { ...DEFAULTS, ...this._config };
       delete data.sections;
