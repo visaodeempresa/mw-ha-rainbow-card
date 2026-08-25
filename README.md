@@ -46,6 +46,46 @@ bands:
 - **Mesmas ações da família MW:** toque, toque longo e toque duplo, com
   `more-info`, navegar, abrir link ou nada. No modo `auto`, cada célula abre
   o `more-info` do seu próprio sensor.
+- **Papel e relevo, como no [MW Power Button](https://github.com/visaodeempresa/mw-ha-power-button-card).**
+  O arco-íris pode descansar numa folha de papel encardido — as mesmas 49
+  cores da família, mais o creme original — e ganhar o relevo 3D do botão de
+  tomada: luz presa na quina de cima, sombra na de baixo, faixas afundadas na
+  folha.
+
+## Papel e relevo
+
+```yaml
+type: custom:mw-rainbow-card
+paper_color: yellow-3      # creme original: paper · fundo do tema: none
+depth: 3d                  # soft (padrão) · 3d · flat
+sections: [dev1, dev2, dev3]
+bands: [temperature, humidity]
+```
+
+| Opção | Padrão | O que faz |
+|---|---|---|
+| `paper_color` | `none` | `none` = fundo do tema · `paper` = creme original · `<matiz>-<1..7>` nas 7 matizes do arco-íris (`red`, `orange`, `yellow`, `green`, `blue`, `indigo`, `violet`), tom 1 quase branco e 7 mais encardido |
+| `paper_dark` | `false` | Lê a **mesma chave** na rampa de noite. Manda também no relevo: sem folha, quem dá o tom da luz é o fundo do tema |
+| `depth` | `soft` | `soft` = a sombra de sempre · `3d` = o relevo de papel do MW Power Button · `flat` = chapado |
+
+Três detalhes que valem saber:
+
+- **O padrão não mexe em nada.** `paper_color: none` e `depth: soft` são
+  exatamente o card de antes — quem já tem um arco-íris na tela não acorda com
+  uma folha nova por baixo dele.
+- **A tinta acompanha o papel.** Com papel, o nome do card e a identificação
+  da faixa passam a usar a tinta da paleta (escura no papel claro, clara no de
+  noite) — a menos que você tenha escolhido as suas em `color_name` /
+  `color_band_label`. As **células** continuam com o `text_mode`, porque elas
+  estão em cima da faixa colorida, não do papel.
+- **`shadow` e `lift` viraram `depth`.** YAML antigo continua valendo: o card
+  traduz sozinho (`shadow: false` → `flat`, `lift: true` → `3d`). Se os dois
+  aparecerem, o `depth` escrito na mão ganha.
+
+No `orientation: vertical` a folha ocupa a largura toda da coluna do
+dashboard, e as faixas ficam encostadas num canto dela — é a geometria de
+sempre do modo vertical, que o papel só torna visível. Use `length` e o
+tamanho da coluna para acertar.
 
 ## Instalação
 
@@ -76,7 +116,8 @@ recarregar a página com ⌘⇧R.
 | `band_labels` | `icon` | `icon` \| `text` \| `none` — a identificação da faixa |
 | `text_mode` | `auto` | `auto` (contraste) \| `theme` \| `fixed` |
 | `divider` | `false` | Risco separando as seções |
-| `gradient` / `shadow` / `lift` | `true`/`true`/`false` | Vidro, relevo e elevação |
+| `gradient` | `true` | Brilho de vidro sobre as faixas |
+| `paper_color` / `paper_dark` / `depth` | `none`/`false`/`soft` | Papel e relevo — veja acima |
 | `tap_action` | `auto` | `auto` \| `more-info` \| `navigate` \| `url` \| `none` |
 | `hold_action` / `double_tap_action` | `none` | Idem, sem o `auto` |
 
@@ -120,6 +161,19 @@ Arquivo único, sem build: `dist/mw-rainbow-card.js` é fonte **e** artefato.
 node --check dist/mw-rainbow-card.js
 node tools/probe.js      # instancia card e editor fora do navegador
 ```
+
+Bancada visual (não abre por `file://` — o navegador recusa o módulo vizinho):
+
+```bash
+python3 -m http.server 8765
+```
+
+- `tools/bancada-papel.html` — os 49 papéis × os três relevos, claro e escuro
+- `tools/bancada.html` — o `<select>` do editor sob enxurrada de `hass`
+
+As cores de papel vêm de `IA/lib/paper-palette` e `IA/lib/paper-dark-palette`,
+embutidas byte a byte entre marcadores. Antes de commitar o `dist`:
+`IA/tools/check-embeds.sh`.
 
 Fluxo `feature → develop → release → main`; o merge na `main` dispara o bump
 semântico, a tag e a release que o HACS enxerga.

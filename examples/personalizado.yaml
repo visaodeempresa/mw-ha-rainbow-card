@@ -42,4 +42,24 @@ section_labels: none
 show_values: false
 padding: 0
 band_radius: 5
-shadow: false
+depth: flat
+
+# ---------------------------------------------------------------------------
+# Papel e relevo: a folha do MW Power Button por baixo do arco-íris.
+type: custom:mw-rainbow-card
+name: A casa inteira
+paper_color: yellow-3        # creme original: paper · fundo do tema: none
+depth: 3d                    # luz na quina de cima, faixas afundadas na folha
+sections: [1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d, 2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e]
+bands: [temperature, humidity]
+
+# ---------------------------------------------------------------------------
+# O mesmo papel, na rampa de noite — para dashboard escuro. A chave da cor é a
+# mesma; quem troca a rampa é o paper_dark.
+type: custom:mw-rainbow-card
+name: A casa inteira
+paper_color: indigo-6
+paper_dark: true
+depth: 3d
+sections: [1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d, 2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e]
+bands: [temperature, humidity]

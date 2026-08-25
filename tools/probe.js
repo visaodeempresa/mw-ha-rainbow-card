@@ -196,6 +196,61 @@ check("band_labels: text troca ícone por nome",
   mk({ ...base, band_labels: "text" }).includes(">Temperatura<"));
 check("band_labels: none tira a sarjeta", !mk({ ...base, band_labels: "none" }).includes('class="gut"'));
 
+/* ---- papel e relevo ---- */
+// Padrão: nada muda para quem já tinha o card na tela — nem folha, nem borda.
+check("sem papel o card fica com o fundo do tema",
+  !html.includes("background:linear-gradient(145deg") && !/ha-card\{[^}]*border:1px solid/.test(html),
+  html.slice(0, 300));
+check("relevo padrão é a sombra de sempre",
+  html.includes("0 2px 3px rgba(0,0,0,0.18), 0 6px 12px rgba(0,0,0,0.14)"));
+check("sem relevo 3D o card não sobe", /ha-card\{[^}]*transform:none/.test(html), html.slice(0, 400));
+
+const creme = mk({ ...base, paper_color: "paper" });
+check("papel creme pinta a folha",
+  creme.includes("background:linear-gradient(145deg, #fdfaf3, #e8e3d8)"), creme.slice(0, 400));
+check("papel traz a borda tirada do próprio tom", /ha-card\{[^}]*border:1px solid/.test(creme));
+check("no papel a tinta do nome vem da paleta, não do tema",
+  creme.includes("rgba(28, 25, 20, 0.92)") && !creme.includes("var(--primary-text-color)"),
+  creme.slice(0, 600));
+
+const azul = mk({ ...base, paper_color: "blue-4" });
+check("os 49 tons: azul-4 sai da rampa clara",
+  azul.includes("hsl(203, 15%, 92%)"), azul.slice(0, 400));
+const azulNoite = mk({ ...base, paper_color: "blue-4", paper_dark: true });
+check("a mesma chave na rampa de noite",
+  azulNoite.includes("hsl(203, 19%, 19%)"), azulNoite.slice(0, 400));
+check("no papel de noite a tinta clareia", azulNoite.includes("rgba(247, 244, 236, 0.94)"));
+// papel inválido não pode apagar o card: a paleta devolve o creme
+check("papel inexistente cai no creme, não em vazio",
+  mk({ ...base, paper_color: "roxo-9" }).includes("background:linear-gradient(145deg, #fdfaf3, #e8e3d8)"));
+
+const tresD = mk({ ...base, paper_color: "paper", depth: "3d" });
+check("3D: luz na quina de cima e sombra na de baixo (os números do MW Power Button)",
+  tresD.includes("inset 4px 4px 8px rgba(255,252,240,0.90)")
+  && tresD.includes("inset -4px -4px 8px rgba(0,0,0,0.12)"), tresD.slice(0, 500));
+check("3D: a folha projeta no dashboard", tresD.includes("0 12px 28px rgba(0,0,0,0.08)"));
+check("3D: a faixa AFUNDA no papel (senão sobram dois relevos salientes)",
+  tresD.includes("inset 2px 2px 5px rgba(0,0,0,0.30)"), tresD.slice(0, 900));
+check("3D levanta o card 1px", /ha-card\{[^}]*transform:translateY\(-1px\)/.test(tresD));
+const tresDNoite = mk({ ...base, paper_color: "paper", paper_dark: true, depth: "3d" });
+check("no escuro a luz do relevo cai de 0,90 para 0,10",
+  tresDNoite.includes("inset 4px 4px 8px rgba(255,252,240,0.10)"), tresDNoite.slice(0, 500));
+const chapado = mk({ ...base, depth: "flat" });
+check("chapado tira a sombra do card e a da faixa",
+  /ha-card\{[^}]*box-shadow:none/.test(chapado) && /\.strip\{[^}]*box-shadow:none/.test(chapado),
+  chapado.slice(0, 700));
+
+// YAML de antes do depth continua valendo — traduzido uma vez, no setConfig
+const velhoSemSombra = mk({ ...base, shadow: false });
+check("legado: shadow:false vira relevo chapado",
+  /ha-card\{[^}]*box-shadow:none/.test(velhoSemSombra), velhoSemSombra.slice(0, 400));
+const velhoLift = mk({ ...base, lift: true });
+check("legado: lift:true vira relevo 3D",
+  velhoLift.includes("inset 4px 4px 8px rgba(255,252,240,0.90)"), velhoLift.slice(0, 400));
+const velhoEnovo = mk({ ...base, shadow: false, depth: "3d" });
+check("depth escrito na mão ganha do legado",
+  velhoEnovo.includes("inset 4px 4px 8px"), velhoEnovo.slice(0, 300));
+
 /* ---- limites e defesa ---- */
 const semLeitura = mk({ sections: [{ temp_entity: "sensor.nao_existe" }], bands: [{ metric: "temperature" }] });
 check("sem leitura usa a cor de indisponível e não quebra",
@@ -243,8 +298,20 @@ check("blend_amount some com o blend desligado", (() => {
   const e = new reg["mw-rainbow-card-editor"](); e.hass = hass; e.setConfig({ ...base, blend: false });
   return !byName(e._schema(), "blend_amount");
 })());
-check("quatro grupos expansíveis", ed._schema().filter((f) => f.type === "expandable").length === 3);
+check("quatro grupos expansíveis", ed._schema().filter((f) => f.type === "expandable").length === 4);
 check("ações com o modo automático", opts(grupo(ed._schema(), /Ações/), "tap_action")[0] === "auto");
+const papelGrupo = () => grupo(ed._schema(), /Papel/);
+check("o papel oferece o fundo do tema, o creme e os 49 tons",
+  opts(papelGrupo(), "paper_color").length === 51
+  && opts(papelGrupo(), "paper_color")[0] === "none"
+  && opts(papelGrupo(), "paper_color")[1] === "paper", JSON.stringify(opts(papelGrupo(), "paper_color")?.slice(0, 3)));
+check("o relevo oferece suave, 3D e chapado",
+  JSON.stringify(opts(papelGrupo(), "depth")) === JSON.stringify(["soft", "3d", "flat"]));
+ed.setConfig({ ...base, paper_dark: true });
+check("com o papel de noite os rótulos vêm da rampa escura",
+  byName(papelGrupo(), "paper_color").selector.select.options[1].label.includes("noite"),
+  byName(papelGrupo(), "paper_color").selector.select.options[1].label);
+ed.setConfig(base);
 
 // seções e faixas são listas: o editor guarda as duas fora do ha-form
 const edL = new reg["mw-rainbow-card-editor"]();

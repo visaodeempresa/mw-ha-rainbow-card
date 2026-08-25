@@ -1,0 +1,93 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>bancada mw-rainbow-card — papel e relevo</title>
+<style>
+  body{font:14px system-ui;margin:0;padding:20px;background:var(--bg,#101012);color:var(--fg,#eee)}
+  body.claro{--bg:#e9e7e2;--fg:#1a1a1a}
+  h3{margin:26px 0 10px;font-size:13px;letter-spacing:.08em;text-transform:uppercase;opacity:.65}
+  .grade{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:22px}
+  .cel{display:flex;flex-direction:column;gap:6px}
+  .cap{font-size:11px;opacity:.6}
+  button{font:inherit;padding:6px 12px;border-radius:8px;border:1px solid #8886;background:#8882;color:inherit;cursor:pointer}
+</style>
+<button onclick="document.body.classList.toggle('claro')">alternar tema da página</button>
+<div id="host"></div>
+<script src="../dist/mw-rainbow-card.js"></script>
+<script>
+/* Bancada visual do papel e do relevo. Não abre por file:// (o navegador
+ * recusa o módulo vizinho) — suba um servidor na raiz do repo:
+ *     python3 -m http.server 8765     →  http://localhost:8765/tools/bancada-papel.html
+ *
+ * `ha-card` e `ha-icon` só existem dentro do HA. Aqui eles nascem como
+ * elementos desconhecidos, que o navegador trata como inline — sem o
+ * display:block abaixo o card apareceria despencado, e o relevo (que é
+ * box-shadow no ha-card) não teria caixa nenhuma para desenhar. */
+const S = (state, attrs) => ({ state: String(state), attributes: attrs });
+const ENT = {
+  "sensor.sala_temperatura": { device_id: "dev1" }, "sensor.sala_umidade": { device_id: "dev1" },
+  "sensor.quarto_temperatura": { device_id: "dev2" }, "sensor.quarto_umidade": { device_id: "dev2" },
+  "sensor.cozinha_temperatura": { device_id: "dev3" }, "sensor.cozinha_umidade": { device_id: "dev3" },
+};
+const hass = {
+  states: {
+    "sensor.sala_temperatura": S(23.4, { device_class: "temperature", unit_of_measurement: "°C" }),
+    "sensor.sala_umidade": S(58, { device_class: "humidity", unit_of_measurement: "%" }),
+    "sensor.quarto_temperatura": S(15, { device_class: "temperature", unit_of_measurement: "°C" }),
+    "sensor.quarto_umidade": S(82, { device_class: "humidity", unit_of_measurement: "%" }),
+    "sensor.cozinha_temperatura": S(31, { device_class: "temperature", unit_of_measurement: "°C" }),
+    "sensor.cozinha_umidade": S(41, { device_class: "humidity", unit_of_measurement: "%" }),
+  },
+  entities: ENT,
+  devices: { dev1: { name: "Sala" }, dev2: { name: "Quarto" }, dev3: { name: "Cozinha" } },
+  areas: {}, locale: { language: "pt-BR" }, callService() {},
+};
+const base = {
+  name: "A casa inteira",
+  sections: [{ device: "dev1" }, { device: "dev2" }, { device: "dev3" }],
+  bands: [{ metric: "temperature" }, { metric: "humidity" }],
+};
+const host = document.getElementById("host");
+const cartao = (cap, cfg) => {
+  const cel = document.createElement("div");
+  cel.className = "cel";
+  const el = document.createElement("mw-rainbow-card");
+  el.setConfig({ ...base, ...cfg });
+  el.hass = hass;
+  el.shadowRoot.innerHTML += "<style>ha-card{display:block}ha-icon{display:none}</style>";
+  const legenda = document.createElement("div");
+  legenda.className = "cap";
+  legenda.textContent = cap;
+  cel.append(el, legenda);
+  return cel;
+};
+const secao = (titulo, itens) => {
+  const h = document.createElement("h3"); h.textContent = titulo;
+  const g = document.createElement("div"); g.className = "grade";
+  itens.forEach(([cap, cfg]) => g.appendChild(cartao(cap, cfg)));
+  host.append(h, g);
+};
+
+secao("relevo (sem papel — o cartão do tema)", [
+  ["depth: soft (padrão)", {}],
+  ["depth: 3d", { depth: "3d", paper_dark: true }],
+  ["depth: flat", { depth: "flat" }],
+]);
+secao("papel claro × relevo", [
+  ["paper + soft", { paper_color: "paper" }],
+  ["paper + 3d", { paper_color: "paper", depth: "3d" }],
+  ["yellow-3 + 3d", { paper_color: "yellow-3", depth: "3d" }],
+  ["green-5 + 3d", { paper_color: "green-5", depth: "3d" }],
+  ["blue-7 + 3d (o mais encardido)", { paper_color: "blue-7", depth: "3d" }],
+  ["violet-2 + flat", { paper_color: "violet-2", depth: "flat" }],
+]);
+secao("papel de noite × relevo", [
+  ["paper (grafite) + 3d", { paper_color: "paper", paper_dark: true, depth: "3d" }],
+  ["red-4 + 3d", { paper_color: "red-4", paper_dark: true, depth: "3d" }],
+  ["indigo-6 + 3d", { paper_color: "indigo-6", paper_dark: true, depth: "3d" }],
+  ["blue-3 + soft", { paper_color: "blue-3", paper_dark: true }],
+]);
+secao("papel no vertical", [
+  ["orange-4 + 3d, vertical", { paper_color: "orange-4", depth: "3d", orientation: "vertical", length: 200 }],
+  ["grafite + 3d, vertical", { paper_color: "paper", paper_dark: true, depth: "3d", orientation: "vertical", length: 200 }],
+]);
+</script>
