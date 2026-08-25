@@ -1251,7 +1251,7 @@
     documentationURL: "https://github.com/visaodeempresa/mw-ha-rainbow-card",
   });
 
-  console.info("%c MW-RAINBOW-CARD %c 0.1.2 ",
+  console.info("%c MW-RAINBOW-CARD %c 0.2.0 ",
     "background:#1a1a1a;color:#fdfaf3;font-weight:700;",
     "background:#e4572e;color:#1a1a1a;font-weight:700;");
 })();
