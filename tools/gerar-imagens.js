@@ -65,6 +65,19 @@ AMB.forEach(([nome, t, h, b, w, v, a, kwh, lx, co2, voc, hcho, pm], i) => {
     [`${p}_pm25`]: S(pm, {}),
   });
 });
+// A faixa que comanda: luzes com brilho e cor de verdade.
+const LUZES = [
+  ["light.mesa", "on", { brightness: 128, supported_color_modes: ["brightness"] }],
+  ["light.sala", "on", { brightness: 230, rgb_color: [255, 70, 40], supported_color_modes: ["rgb"] }],
+  ["light.suite", "on", { brightness: 90, color_temp_kelvin: 2200, supported_color_modes: ["color_temp"] }],
+  ["light.varanda", "off", { supported_color_modes: ["brightness"] }],
+];
+LUZES.forEach(([id, st, at], i) => {
+  states[id] = S(st, { ...at, friendly_name: AMB[i][0] });
+  entities[id] = { device_id: `luz${i}` };
+  devices[`luz${i}`] = { name: AMB[i][0] };
+});
+
 const hass = { states, entities, devices, areas: {}, locale: { language: "pt-BR" }, callService() {} };
 
 /* ---- lê o que o card REALMENTE produziu ---- */
@@ -78,13 +91,19 @@ const lerCard = (cfg) => {
   let m;
   while ((m = re.exec(html))) tiras.push(m[1]);
   const textos = [];
-  const reC = /class="cell"[^>]*>(.*?)<\/div>/g;
+  // A célula de controle é `class="cell ctl arr"` e a marcação dela quebra
+  // linha (o <i> do véu vem antes do texto) — o casador precisa dos dois.
+  const reC = /class="cell[^"]*"[\s\S]*?>([\s\S]*?)<\/div>/g;
   let c;
   while ((c = reC.exec(html))) {
     const lbl = /class="lbl">([^<]*)</.exec(c[1]);
     const val = /class="val">([^<]*)/.exec(c[1]);
     const un = /class="u">([^<]*)</.exec(c[1]);
-    textos.push({ lbl: lbl ? lbl[1] : "", val: val ? val[1] : "", un: un ? un[1] : "" });
+    // O véu do nível, quando a faixa comanda: é ele que faz a célula ser o
+    // próprio cursor, então a imagem tem de mostrá-lo.
+    const veu = /class="veu" style="transform:scale[XY]\(([\d.]+)\)/.exec(c[1]);
+    textos.push({ lbl: lbl ? lbl[1] : "", val: val ? val[1] : "", un: un ? un[1] : "",
+      veu: veu ? Number(veu[1]) : null });
   }
   return { tiras, textos, cfg };
 };
@@ -122,6 +141,10 @@ const svg = (titulo, cards, largura = 900) => {
       for (let i = 0; i < nSec; i += 1) {
         const cel = dados.textos[bi * nSec + i] || {};
         const cx = M + w * i + w / 2;
+        if (cel.veu !== null && cel.veu !== undefined && cel.veu > 0) {
+          const lw = w * cel.veu;
+          corpo += `<rect x="${(M + w * i + w - lw).toFixed(2)}" y="${y}" width="${lw.toFixed(2)}" height="${ALT_TIRA}" fill="rgba(0,0,0,0.55)"/>`;
+        }
         if (cel.lbl) corpo += `<text x="${cx}" y="${y + 14}" class="l">${esc(cel.lbl)}</text>`;
         // O card separa valor e unidade por CSS; aqui é texto puro, então o
         // espaço tem de ser explícito — e "%" cola, como na tela.
@@ -171,6 +194,11 @@ const arquivos = [
   ["arco-iris-nivel.svg", "Nível — iluminância e bateria", [
     { nome: "ILUMINÂNCIA · BATERIA (RÉGUA FINA) · BATERIA (RÉGUA CANÔNICA)", dados: lerCard(cfg([
       { metric: "illuminance" }, { metric: "battery", scale: "fina" }, { metric: "battery", scale: "canonica" }])) },
+  ]],
+  ["arco-iris-controle.svg", "A faixa que comanda", [
+    { nome: "TOQUE LIGA · ARRASTAR AJUSTA · A COR É A DA PRÓPRIA LUZ", dados: lerCard({
+      sections: LUZES.map(([id]) => ({ entities: { control: id } })),
+      bands: [{ metric: "control" }], section_labels: "all", band_height: 46, blend: false }) },
   ]],
   ["arco-iris-completo.svg", "A casa inteira numa tira só", [
     { nome: "QUATRO AMBIENTES × DEZ GRANDEZAS", dados: lerCard(cfg([
