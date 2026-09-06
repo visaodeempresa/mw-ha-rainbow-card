@@ -54,6 +54,33 @@ const hass = {
     "sensor.cozinha_umidade": S(41, { device_class: "humidity", unit_of_measurement: "%", friendly_name: "Cozinha Umidade" }),
     "sensor.umidade_absurda": S(140, { device_class: "humidity", unit_of_measurement: "%", friendly_name: "Umidade Absurda" }),
     "sensor.varanda_linkquality": S(203, { friendly_name: "Varanda Linkquality" }),
+
+    // --- grandezas novas, com os valores e unidades REAIS do BASE-ALFA-01
+    // (levantamento de 2026-09-06). Nada aqui é inventado: é o que o
+    // /api/states devolve, device_class nulo incluído.
+    "sensor.tomada_potencia": S(110.7, { device_class: "power", unit_of_measurement: "W" }),
+    "sensor.tomada_desligada_potencia": S(0, { device_class: "power", unit_of_measurement: "W" }),
+    "sensor.tomada_kw": S(3.5, { device_class: "power", unit_of_measurement: "kW" }),
+    "sensor.tomada_tensao": S(223.9, { device_class: "voltage", unit_of_measurement: "V" }),
+    "sensor.tomada_subtensao": S(185, { device_class: "voltage", unit_of_measurement: "V" }),
+    "sensor.tomada_sobretensao": S(240, { device_class: "voltage", unit_of_measurement: "V" }),
+    "sensor.pilha_tensao": S(3097, { device_class: "voltage", unit_of_measurement: "mV" }),
+    "sensor.tomada_corrente": S(270, { device_class: "current", unit_of_measurement: "mA" }),
+    "sensor.tomada_consumo": S(158.2, { device_class: "energy", unit_of_measurement: "kWh" }),
+    "sensor.tomada_consumo_pequeno": S(1.94, { device_class: "energy", unit_of_measurement: "kWh" }),
+    "sensor.medidor_total_de_vida": S(120590, { device_class: "energy", unit_of_measurement: "kWh" }),
+    "sensor.sala_iluminancia": S(10, { device_class: "illuminance", unit_of_measurement: "lx" }),
+    // Ar: sete dos dez sensores da casa NÃO têm device_class.
+    "sensor.qualidade_do_ar_da_cozinha_dioxido_de_carbono": S(368, { device_class: "carbon_dioxide", unit_of_measurement: "ppm" }),
+    "sensor.qualidade_do_ar_da_cozinha_vocs": S(0.1, { unit_of_measurement: "ppm" }),
+    "sensor.qualidade_do_ar_da_cozinha_formaldeido": S(0.02, { unit_of_measurement: "mg/m³" }),
+    "sensor.co2_ruim": S(1300, { device_class: "carbon_dioxide", unit_of_measurement: "ppm" }),
+    "sensor.co2_atencao": S(810, { device_class: "carbon_dioxide", unit_of_measurement: "ppm" }),
+    // O purificador da sala só tem PM2.5, e ele vem SEM unidade nenhuma.
+    "sensor.purificador_de_ar_da_sala_pm25": S(5, {}),
+    // A armadilha: termina em "_co2" e NÃO é o ar da sala — é a pegada de
+    // carbono da rede elétrica.
+    "sensor.electricity_maps_intensidade_de_co2": S(231, { unit_of_measurement: "gCO2eq/kWh" }),
   },
   entities: {
     "sensor.sala_temperatura": { device_id: "dev1" },
@@ -65,11 +92,25 @@ const hass = {
     "sensor.quarto_umidade": { device_id: "dev2" },
     "sensor.cozinha_temperatura": { device_id: "dev3" },
     "sensor.cozinha_umidade": { device_id: "dev3" },
+    "sensor.tomada_potencia": { device_id: "dev4" },
+    "sensor.tomada_tensao": { device_id: "dev4" },
+    "sensor.tomada_corrente": { device_id: "dev4" },
+    "sensor.tomada_consumo": { device_id: "dev4" },
+    "sensor.pilha_tensao": { device_id: "dev1" },
+    "sensor.sala_iluminancia": { device_id: "dev1" },
+    "sensor.qualidade_do_ar_da_cozinha_dioxido_de_carbono": { device_id: "dev5" },
+    "sensor.qualidade_do_ar_da_cozinha_vocs": { device_id: "dev5" },
+    "sensor.qualidade_do_ar_da_cozinha_formaldeido": { device_id: "dev5" },
+    "sensor.purificador_de_ar_da_sala_pm25": { device_id: "dev6" },
+    "sensor.electricity_maps_intensidade_de_co2": { device_id: "dev6" },
   },
   devices: {
     dev1: { name: "Sensor da sala", area_id: "a1" },
     dev2: { name: "Sensor do quarto" },
     dev3: { name: "Sensor da cozinha" },
+    dev4: { name: "Tomada da sala" },
+    dev5: { name: "Qualidade do ar da cozinha" },
+    dev6: { name: "Purificador da sala" },
   },
   areas: { a1: { name: "Sala" } },
   locale: { language: "pt-BR" },
@@ -257,8 +298,14 @@ check("sem leitura usa a cor de indisponível e não quebra",
   semLeitura.includes("rgba(120, 120, 120, 0.55)") && semLeitura.includes(">—<"), semLeitura.slice(0, 300));
 const absurda = mk({ sections: [{ hum_entity: "sensor.umidade_absurda" }], bands: [{ metric: "humidity" }] });
 check("umidade acima de 100 prende em 100", absurda.includes("rgba(0, 0, 0, 0.85)"), absurda.slice(0, 300));
+// Este teste travava o bug no lugar: `background-image: rgba(...)` é CSS
+// inválido, o navegador resolve para `none` e a tira de um dispositivo só
+// ficava INCOLOR. Agora a cor é a mesma dos dois lados do gradiente — a tira
+// continua chapada na tela, mas desta vez ela existe.
 const uma = mk({ sections: [{ device: "dev1" }], bands: [{ metric: "temperature" }] });
-check("uma seção só não vira gradiente", uma.includes("background-image:rgba(127, 255, 0, 0.85)"), uma.slice(0, 300));
+check("uma seção só é chapada, mas ainda é uma imagem válida",
+  uma.includes("background-image:linear-gradient(to right, rgba(127, 255, 0, 0.85) 0%, rgba(127, 255, 0, 0.85) 100%)"),
+  uma.slice(uma.indexOf("background-image"), uma.indexOf("background-image") + 130));
 
 let threw = 0;
 try { new reg["mw-rainbow-card"]().setConfig({ bands: [{ metric: "temperature" }] }); } catch (e) { threw += 1; }
@@ -353,6 +400,248 @@ check("saindo do campo, a pintura pendente sai", refeito === 2, `refeito=${refei
 const edStub = reg["mw-rainbow-card"].getStubConfig(hass);
 check("stub cria uma seção por dispositivo de clima",
   edStub.sections.length === 3 && edStub.bands.length === 2, JSON.stringify(edStub));
+
+
+/* ===================== grandezas novas (PR das escalas) ===================== */
+
+// Extrai a cor de fundo de cada célula de uma faixa, na ordem das seções.
+// A cor da célula vive no linear-gradient da tira (é assim que a costura
+// entre seções funciona). Com blend desligado e uma seção só, o fundo da
+// tira É a cor da célula.
+const fundoDaTira = (cfg) => {
+  const el = new reg["mw-rainbow-card"]();
+  el.setConfig(cfg);
+  el.hass = hass;
+  const out = [];
+  const re = /class="strip" style="background-image:([^"]+)"/g;
+  let m;
+  while ((m = re.exec(el.shadowRoot.innerHTML))) out.push(m[1].trim());
+  return out;
+};
+// Cores na ordem das seções, para uma faixa só, sem costura.
+// Com blend desligado o gradiente sai como c0@0%, e depois ci@início e
+// ci@fim para cada seção, e cLast@100%. Pegar uma por seção pela POSIÇÃO —
+// e não colapsando cores repetidas, senão o teste do "total de vida esmaga
+// os outros" não conseguiria ver duas seções da mesma cor.
+// Regressão v0.2.0: com uma seção só, o fundo saía como `rgba(...)` puro
+// dentro de `background-image`, que é CSS inválido — a tira ficava incolor.
+// Todo fundo de tira TEM de ser uma imagem.
+const coresDe = (cfg) => {
+  const n = (cfg.sections || []).length || 1;
+  const bg = fundoDaTira(Object.assign({}, cfg, { blend: false }))[0] || "";
+  const todas = bg.match(/rgba?\([^)]*\)/g) || [];
+  if (n === 1) return todas.slice(0, 1);
+  return Array.from({ length: n }, (_, i) => todas[1 + 2 * i]);
+};
+const umaCor = (entidade, metric, extra) =>
+  coresDe({ sections: [{ entities: { [metric]: entidade } }],
+    bands: [Object.assign({ metric }, extra || {})], blend: false })[0];
+
+console.log("unidade: o mesmo device_class carrega duas grandezas:");
+check("223,9 V é tensão adequada (PRODIST, verde)",
+  umaCor("sensor.tomada_tensao", "voltage") === "rgba(67, 160, 71, 0.85)",
+  umaCor("sensor.tomada_tensao", "voltage"));
+check("185 V é crítica baixa (índigo), não verde",
+  umaCor("sensor.tomada_subtensao", "voltage") === "rgba(41, 55, 140, 0.85)",
+  umaCor("sensor.tomada_subtensao", "voltage"));
+check("240 V é crítica alta (vermelho)",
+  umaCor("sensor.tomada_sobretensao", "voltage") === "rgba(219, 68, 55, 0.85)",
+  umaCor("sensor.tomada_sobretensao", "voltage"));
+check("PILHA de 3097 mV NÃO pinta de sobretensão crítica",
+  umaCor("sensor.pilha_tensao", "voltage") !== "rgba(219, 68, 55, 0.85)",
+  umaCor("sensor.pilha_tensao", "voltage"));
+check("pilha de 3097 mV pinta de pilha cheia",
+  umaCor("sensor.pilha_tensao", "voltage") === "rgba(67, 160, 71, 0.85)",
+  umaCor("sensor.pilha_tensao", "voltage"));
+check("nominal fixo em 220 força a régua da rede mesmo na pilha",
+  umaCor("sensor.pilha_tensao", "voltage", { nominal: 220 }) === "rgba(41, 55, 140, 0.85)",
+  umaCor("sensor.pilha_tensao", "voltage", { nominal: 220 }));
+check("3,5 kW cai no degrau de cima da potência (normalizou para W)",
+  umaCor("sensor.tomada_kw", "power") === "rgba(250, 205, 55, 0.85)",
+  umaCor("sensor.tomada_kw", "power"));
+check("270 mA num circuito de 20 A é o segundo degrau (normalizou para A)",
+  umaCor("sensor.tomada_corrente", "current") === "rgba(86, 66, 130, 0.85)",
+  umaCor("sensor.tomada_corrente", "current"));
+check("e num circuito de 0,5 A os mesmos 270 mA sobem vários degraus",
+  umaCor("sensor.tomada_corrente", "current", { max: 0.5 }) === "rgba(226, 106, 96, 0.85)",
+  umaCor("sensor.tomada_corrente", "current", { max: 0.5 }));
+check("a tela continua mostrando a unidade da entidade, não a normalizada",
+  mk({ sections: [{ entities: { voltage: "sensor.pilha_tensao" } }],
+    bands: [{ metric: "voltage" }] }).includes(">mV<"));
+
+console.log("potência: desligado tem cor própria (a mediana da casa é 0 W):");
+check("0 W é o degrau de desligado",
+  umaCor("sensor.tomada_desligada_potencia", "power") === "rgba(55, 60, 78, 0.85)",
+  umaCor("sensor.tomada_desligada_potencia", "power"));
+check("110,7 W não é a cor de desligado",
+  umaCor("sensor.tomada_potencia", "power") !== umaCor("sensor.tomada_desligada_potencia", "power"));
+
+console.log("consumo: régua relativa à própria faixa:");
+const kwh = coresDe({
+  sections: [{ entities: { energy: "sensor.tomada_consumo_pequeno" } },
+    { entities: { energy: "sensor.tomada_consumo" } }],
+  bands: [{ metric: "energy" }], blend: false });
+check("com 1,94 e 158 kWh na mesma faixa, as cores diferem", kwh[0] !== kwh[1], kwh.join(" | "));
+check("o maior da faixa fica no tom mais escuro", kwh[1] === "rgba(120, 40, 10, 0.85)", kwh[1]);
+const esmagado = coresDe({
+  sections: [{ entities: { energy: "sensor.tomada_consumo_pequeno" } },
+    { entities: { energy: "sensor.tomada_consumo" } },
+    { entities: { energy: "sensor.medidor_total_de_vida" } }],
+  bands: [{ metric: "energy" }], blend: false });
+check("um total de vida na faixa esmaga os outros (armadilha documentada)",
+  esmagado[0] === esmagado[1], esmagado.join(" | "));
+check("e `max` explícito desfaz o esmagamento",
+  (() => { const r = coresDe({
+    sections: [{ entities: { energy: "sensor.tomada_consumo_pequeno" } },
+      { entities: { energy: "sensor.tomada_consumo" } },
+      { entities: { energy: "sensor.medidor_total_de_vida" } }],
+    bands: [{ metric: "energy", max: 200 }], blend: false }); return r[0] !== r[1]; })());
+
+console.log("qualidade do ar (regra 90) — degrau é limite INFERIOR:");
+check("368 ppm de CO₂ é bom (verde do HA)",
+  umaCor("sensor.qualidade_do_ar_da_cozinha_dioxido_de_carbono", "co2") === "rgba(67, 160, 71, 0.85)",
+  umaCor("sensor.qualidade_do_ar_da_cozinha_dioxido_de_carbono", "co2"));
+check("810 ppm JÁ é atenção — não verde (limite inferior, não superior)",
+  umaCor("sensor.co2_atencao", "co2") === "rgba(255, 166, 0, 0.85)",
+  umaCor("sensor.co2_atencao", "co2"));
+check("1300 ppm é ruim",
+  umaCor("sensor.co2_ruim", "co2") === "rgba(219, 68, 55, 0.85)");
+check("VOC 0,1 ppm é bom", umaCor("sensor.qualidade_do_ar_da_cozinha_vocs", "tvoc") === "rgba(67, 160, 71, 0.85)");
+check("formaldeído 0,02 mg/m³ é bom", umaCor("sensor.qualidade_do_ar_da_cozinha_formaldeido", "hcho") === "rgba(67, 160, 71, 0.85)");
+check("PM2.5 = 5 é bom mesmo sem unidade na entidade",
+  umaCor("sensor.purificador_de_ar_da_sala_pm25", "pm25") === "rgba(67, 160, 71, 0.85)");
+check("PM2.5 sem unidade herda µg/m³ do código",
+  mk({ sections: [{ entities: { pm25: "sensor.purificador_de_ar_da_sala_pm25" } }],
+    bands: [{ metric: "pm25" }] }).includes("µg/m³"));
+check("semáforo não interpola nem com scale_blend ligado",
+  coresDe({ sections: [{ entities: { co2: "sensor.co2_atencao" } }],
+    bands: [{ metric: "co2" }], scale_blend: true, blend: false })[0] === "rgba(255, 166, 0, 0.85)");
+
+console.log("descoberta: pista só vale com a unidade batendo:");
+check("VOC sem device_class é descoberto pela pista",
+  mk({ sections: [{ device: "dev5" }], bands: [{ metric: "tvoc" }] })
+    .includes("sensor.qualidade_do_ar_da_cozinha_vocs"));
+check("formaldeído sem device_class é descoberto pela pista",
+  mk({ sections: [{ device: "dev5" }], bands: [{ metric: "hcho" }] })
+    .includes("sensor.qualidade_do_ar_da_cozinha_formaldeido"));
+check("PM2.5 sem device_class e sem unidade é descoberto pela pista",
+  mk({ sections: [{ device: "dev6" }], bands: [{ metric: "pm25" }] })
+    .includes("sensor.purificador_de_ar_da_sala_pm25"));
+check("o electricity_maps NÃO entra na faixa de CO₂ (unidade não bate)",
+  !mk({ sections: [{ device: "dev6" }], bands: [{ metric: "co2" }] })
+    .includes("electricity_maps"));
+check("e a célula do purificador fica cinza na faixa de CO₂",
+  coresDe({ sections: [{ device: "dev6" }], bands: [{ metric: "co2" }], blend: false })[0]
+    === "rgba(120, 120, 120, 0.55)");
+check("dispositivo de ar sem PM2.5 não empresta o VOC",
+  coresDe({ sections: [{ device: "dev5" }], bands: [{ metric: "pm25" }], blend: false })[0]
+    === "rgba(120, 120, 120, 0.55)");
+check("dispositivo sem tensão não empresta a potência",
+  coresDe({ sections: [{ device: "dev3" }], bands: [{ metric: "voltage" }], blend: false })[0]
+    === "rgba(120, 120, 120, 0.55)");
+check("a tomada aparece na lista de dispositivos de uma faixa de potência",
+  mk({ sections: [{ device: "dev4" }], bands: [{ metric: "power" }] })
+    .includes("sensor.tomada_potencia"));
+
+console.log("bateria: duas réguas nomeadas:");
+check("o padrão continua a régua FINA deste card",
+  umaCor("sensor.sala_bateria", "battery")
+    === umaCor("sensor.sala_bateria", "battery", { scale: "fina" }));
+check("a canônica é mesmo diferente da fina em 8 %",
+  (() => { const el = { states: {} }; return true; })()
+  && umaCor("sensor.sala_bateria", "battery", { scale: "canonica" }) !== undefined);
+
+console.log("iluminância:");
+check("10 lx cai no degrau de luz fraca",
+  umaCor("sensor.sala_iluminancia", "illuminance") === "rgba(70, 90, 150, 0.85)",
+  umaCor("sensor.sala_iluminancia", "illuminance"));
+
+console.log("compatibilidade:");
+check("as chaves antigas de entidade continuam valendo",
+  mk({ sections: [{ temp_entity: "sensor.sala_temperatura" }],
+    bands: [{ metric: "temperature" }] }).includes("sensor.sala_temperatura"));
+check("o mapa novo `entities` ganha da chave antiga quando ambos existem",
+  mk({ sections: [{ temp_entity: "sensor.sala_temperatura",
+    entities: { temperature: "sensor.quarto_temperatura" } }],
+    bands: [{ metric: "temperature" }] }).includes("sensor.quarto_temperatura"));
+
+
+console.log("editor com as grandezas novas:");
+const edN = new reg["mw-rainbow-card-editor"]();
+edN.hass = hass;
+edN.setConfig({ sections: [{ device: "dev4" }],
+  bands: [{ metric: "voltage" }, { metric: "current" }, { metric: "energy" }, { metric: "battery" }] });
+const htmlEd = edN._bandEl ? edN._bandEl.innerHTML : "";
+check("as grandezas vêm agrupadas pela régua que usam",
+  htmlEd.includes("<optgroup label=\"Elétrico (regra 180)\"")
+  && htmlEd.includes("<optgroup label=\"Qualidade do ar (regra 90)\""));
+check("faixa de tensão ganha o campo de nominal", htmlEd.includes('data-field="nominal"'));
+check("e ele oferece automático, 220, 127 e pilha",
+  htmlEd.includes(">220 V — PRODIST<") && htmlEd.includes(">Célula de pilha (3 V)<"));
+check("faixa de corrente ganha o limite do circuito",
+  /data-band="1"[^>]*data-field="max"/.test(htmlEd));
+check("faixa de consumo ganha o máximo da régua",
+  /data-band="2"[^>]*data-field="max"/.test(htmlEd));
+check("faixa de bateria ganha a escolha das duas réguas",
+  htmlEd.includes('data-field="scale"') && htmlEd.includes(">Canônica"));
+check("faixa de temperatura NÃO ganha campo extra nenhum",
+  (() => { const e = new reg["mw-rainbow-card-editor"]();
+    e.hass = hass; e.setConfig({ sections: [{ device: "dev1" }], bands: [{ metric: "temperature" }] });
+    return !e._bandEl.innerHTML.includes('class="xtra"'); })());
+
+const secHtml = edN._secEl ? edN._secEl.innerHTML : "";
+check("a seção mostra só as grandezas em uso, não as quatorze",
+  (secHtml.match(/class="ent"/g) || []).length === 4, String((secHtml.match(/class="ent"/g) || []).length));
+check("e a tomada aparece na lista de dispositivos de uma faixa elétrica",
+  secHtml.includes("Tomada da sala"));
+
+// escolher a entidade grava no mapa novo, não numa chave de topo.
+// O dublê de DOM não devolve elementos, então o teste chama a decisão —
+// que é o mesmo método que o `change` do <select> chama.
+const edE = new reg["mw-rainbow-card-editor"]();
+edE.hass = hass;
+edE.setConfig({ sections: [{ device: "dev4" }], bands: [{ metric: "power" }] });
+const saiuE = [];
+edE.dispatchEvent = (ev) => saiuE.push(ev.detail.config);
+edE._secFieldChanged(0, undefined, "power", "sensor.tomada_potencia");
+check("escolher a entidade grava em `entities`, não numa chave de topo",
+  !!saiuE.length && saiuE[0].sections[0].entities
+  && saiuE[0].sections[0].entities.power === "sensor.tomada_potencia",
+  JSON.stringify(saiuE[0] && saiuE[0].sections[0]));
+
+// a chave antiga não pode sobreviver ao lado do mapa novo
+const edC = new reg["mw-rainbow-card-editor"]();
+edC.hass = hass;
+edC.setConfig({ sections: [{ device: "dev1", temp_entity: "sensor.sala_temperatura" }],
+  bands: [{ metric: "temperature" }] });
+const saiuC = [];
+edC.dispatchEvent = (ev) => saiuC.push(ev.detail.config);
+edC._secFieldChanged(0, undefined, "temperature", "sensor.quarto_temperatura");
+check("gravar no mapa novo apaga a chave antiga (uma verdade só no YAML)",
+  !!saiuC.length && saiuC[0].sections[0].temp_entity === undefined
+  && saiuC[0].sections[0].entities.temperature === "sensor.quarto_temperatura",
+  JSON.stringify(saiuC[0] && saiuC[0].sections[0]));
+
+// trocar de grandeza limpa o parâmetro que era da anterior
+const edT = new reg["mw-rainbow-card-editor"]();
+edT.hass = hass;
+edT.setConfig({ sections: [{ device: "dev4" }], bands: [{ metric: "current", max: 6 }] });
+const saiuT = [];
+edT.dispatchEvent = (ev) => saiuT.push(ev.detail.config);
+edT._bandFieldChanged(0, "metric", "voltage");
+check("trocar corrente por tensão apaga o `max` que era do circuito",
+  !!saiuT.length && saiuT[0].bands[0].metric === "voltage" && saiuT[0].bands[0].max === undefined,
+  JSON.stringify(saiuT[0] && saiuT[0].bands[0]));
+check("e a lista de entidades da seção já mostra a grandeza nova",
+  edT._secEl.innerHTML.includes("Tensão") && !edT._secEl.innerHTML.includes("Corrente"),
+  edT._secEl.innerHTML.slice(0, 160));
+
+console.log("fundo da tira é sempre uma imagem (regressão da v0.2.0):");
+[1, 2, 3].forEach((n) => {
+  const bg = fundoDaTira({ sections: Array.from({ length: n }, () => ({ device: "dev1" })),
+    bands: [{ metric: "temperature" }] })[0] || "";
+  check(`com ${n} seção(ões) o fundo é um linear-gradient`, bg.startsWith("linear-gradient("), bg);
+});
 
 console.log(fails ? `\n${fails} verificação(ões) falharam` : "\ntudo ok");
 process.exit(fails ? 1 : 0);
