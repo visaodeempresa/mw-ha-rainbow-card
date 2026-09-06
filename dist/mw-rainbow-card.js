@@ -256,6 +256,363 @@
   };
   // <<< mw-climate-scale v1
 
+  // >>> mw-air-quality-scale v1 — fonte canônica: /Volumes/SSD-T1-01/CLAUDE-SSD/IA/lib/mw-air-quality-scale/mw-air-quality-scale.js
+  // Escala canônica de cor para qualidade do ar (CO₂, TVOC, HCHO, PM).
+  // Regra: IA/rules/global/90-cores-de-qualidade-do-ar.md.
+  // As três cores são as do próprio HA, para que um gauge nativo e um
+  // componente nosso na mesma tela não discordem.
+  const MW_AQ_GREEN = "#43a047";   // --success-color  · bom
+  const MW_AQ_AMBER = "#ffa600";   // --warning-color  · atenção
+  const MW_AQ_RED = "#db4437";     // --error-color    · ruim
+
+  // grandeza → { nome, unidade, min, max, degraus [valor de início, cor] }.
+  // `min`/`max` existem para quem desenha mostrador (gauge, régua, barra);
+  // quem só quer a cor usa os degraus.
+  const MW_AQ_SCALE = {
+    co2:  { name: "CO₂", unit: "ppm", min: 350, max: 2000,
+            steps: [[350, MW_AQ_GREEN], [800, MW_AQ_AMBER], [1200, MW_AQ_RED]] },
+    tvoc: { name: "TVOC", unit: "ppm", min: 0, max: 2,
+            steps: [[0, MW_AQ_GREEN], [0.3, MW_AQ_AMBER], [0.6, MW_AQ_RED]] },
+    hcho: { name: "Formaldeído", unit: "mg/m³", min: 0, max: 0.3,
+            steps: [[0, MW_AQ_GREEN], [0.08, MW_AQ_AMBER], [0.1, MW_AQ_RED]] },
+    pm25: { name: "PM2.5", unit: "µg/m³", min: 0, max: 150,
+            steps: [[0, MW_AQ_GREEN], [12, MW_AQ_AMBER], [35, MW_AQ_RED]] },
+  };
+  // apelidos: o que o dono e as integrações chamam a mesma grandeza
+  const MW_AQ_ALIAS = {
+    carbon_dioxide: "co2", dioxido_de_carbono: "co2", co2: "co2",
+    voc: "tvoc", vocs: "tvoc", tvoc: "tvoc", volatile_organic_compounds: "tvoc",
+    formaldeido: "hcho", formaldehyde: "hcho", hcho: "hcho", ch2o: "hcho",
+    pm25: "pm25", "pm2_5": "pm25", "pm2.5": "pm25", particulate_matter: "pm25",
+  };
+
+  const mwAirKind = (kind) => {
+    const k = String(kind || "").toLowerCase().trim();
+    return MW_AQ_ALIAS[k] || (MW_AQ_SCALE[k] ? k : null);
+  };
+
+  // Cor do degrau: o último degrau cujo valor de início já foi alcançado.
+  // Abaixo do primeiro degrau ainda é "bom" (0 ppm de CO₂ não existe na
+  // prática, mas sensor mudo reportando 0 não deve pintar de vermelho).
+  const mwAirColor = (kind, value, alpha) => {
+    const k = mwAirKind(kind);
+    if (!k) return null;
+    const v = Number(value);
+    if (!Number.isFinite(v)) return null;
+    const steps = MW_AQ_SCALE[k].steps;
+    let hex = steps[0][1];
+    for (const [from, color] of steps) { if (v >= from) hex = color; }
+    return mwAirRgba(hex, alpha);
+  };
+
+  // "bom" | "atencao" | "ruim" — para quem precisa do nível, não da cor
+  // (ícone, texto, ordenação, automação).
+  const MW_AQ_LEVELS = ["bom", "atencao", "ruim"];
+  const mwAirLevel = (kind, value) => {
+    const k = mwAirKind(kind);
+    if (!k) return null;
+    const v = Number(value);
+    if (!Number.isFinite(v)) return null;
+    const steps = MW_AQ_SCALE[k].steps;
+    let i = 0;
+    steps.forEach(([from], idx) => { if (v >= from) i = idx; });
+    return MW_AQ_LEVELS[i];
+  };
+
+  // #rrggbb → rgba(...) quando pedem alfa; sem alfa devolve o hex intacto,
+  // que é o que os gauges nativos já usam.
+  const mwAirRgba = (hex, alpha) => {
+    const a = Number(alpha);
+    if (!Number.isFinite(a)) return hex;
+    const m = /^#?([0-9a-f]{6})$/i.exec(String(hex));
+    if (!m) return hex;
+    const n = parseInt(m[1], 16);
+    return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${a})`;
+  };
+
+  // Degraus no formato do custom:modern-circular-gauge (e do type: gauge
+  // nativo, que lê `severity`). Mesma saída do `segmentos()` do Python.
+  const mwAirSegments = (kind) => {
+    const k = mwAirKind(kind);
+    if (!k) return null;
+    return MW_AQ_SCALE[k].steps.map(([from, color]) => ({ from, color }));
+  };
+  // <<< mw-air-quality-scale v1
+
+  // >>> mw-level-scale v1 — fonte canônica: /Volumes/SSD-T1-01/CLAUDE-SSD/IA/lib/mw-level-scale/mw-level-scale.js
+  // Escalas de nível: iluminância (lx) e bateria (%).
+  // Doc: IA/knowledge/escala-de-iluminancia.md.
+  const MW_LEVEL_ALPHA = 0.5;
+
+  // --- ILUMINÂNCIA -------------------------------------------------------
+  // Limites SUPERIORES inclusivos, do mais escuro para o mais claro. Os
+  // degraus crescem em razão ~3-4x porque a percepção de luz é logarítmica:
+  // a diferença entre 0 e 20 lx muda a vida do morador, a diferença entre
+  // 800 e 1200 lx não muda nada. Os números saíram do que os sensores da
+  // casa realmente reportam (medição de 2026-09-02: 0, 4, 6, 8, 10, 20, 31,
+  // 35 lx; remedição de 2026-09-06 com 15 sensores: p50 = 10, p90 = 96,
+  // max = 180) — a vida útil da escala está toda abaixo de 200 lx, e uma
+  // escala linear até 1000 pintaria a casa inteira da mesma cor.
+  // A cor é azul-noite -> âmbar de sol, e NÃO é a rampa de temperatura de
+  // propósito: quem olha a planta térmica e a planta de luz lado a lado não
+  // pode confundir as duas.
+  const MW_LUX_STOPS = [0.9, 5, 20, 80, 250, 800];
+  const MW_LUX_RGB = [
+    "10, 14, 30",     // escuro — noite, olho adaptado
+    "40, 48, 90",     // penumbra — dá para andar
+    "70, 90, 150",    // luz fraca — TV, abajur
+    "120, 160, 210",  // luz de ambiente
+    "190, 215, 235",  // claro — leitura confortável
+    "245, 235, 170",  // muito claro — luz de tarefa
+    "255, 214, 90",   // sol entrando
+  ];
+
+  // --- BATERIA -----------------------------------------------------------
+  // Limites SUPERIORES inclusivos, em %. Ruim -> bom, vermelho -> verde.
+  // `canonica`: a régua documentada na página de iluminância, usada pelo
+  // mw-ha-state-color-element. Quatro degraus.
+  const MW_BAT_CANON_STOPS = [10, 20, 40, 60];
+  const MW_BAT_CANON_RGB = [
+    "219, 68, 55",   // <=10 % — troque hoje
+    "255, 140, 0",   // <=20 % — troque esta semana
+    "255, 166, 0",   // <=40 % — de olho
+    "154, 205, 50",  // <=60 % — tranquilo
+    "67, 160, 71",   // acima — cheia
+  ];
+  // `fina`: a régua do mw-ha-rainbow-card. Cinco degraus — separa "quase
+  // morta" (<=5 %) de "morrendo" (<=20 %) e ainda enxerga o topo da carga
+  // (<=80 %), que num arco-íris de 8 dispositivos lado a lado é o que deixa
+  // ver qual pilha vai cair primeiro.
+  const MW_BAT_FINA_STOPS = [5, 20, 40, 60, 80];
+  const MW_BAT_FINA_RGB = [
+    "139, 0, 0",     // <=5 %  — quase morta
+    "229, 57, 53",   // <=20 % — morrendo
+    "255, 152, 0",   // <=40 % — de olho
+    "253, 216, 53",  // <=60 % — ainda dá
+    "156, 204, 101", // <=80 % — tranquilo
+    "67, 160, 71",   // acima  — cheia
+  ];
+
+  const MW_LEVEL_ALIAS = {
+    lux: "lux", lx: "lux", illuminance: "lux", iluminancia: "lux", luz: "lux",
+    battery: "battery", bateria: "battery", bat: "battery",
+    battery_fina: "battery_fina", bateria_fina: "battery_fina", fina: "battery_fina",
+    battery_canonica: "battery", bateria_canonica: "battery", canonica: "battery",
+  };
+
+  const mwLevelRgba = (triplet, alpha) =>
+    `rgba(${triplet}, ${alpha === undefined || alpha === null ? MW_LEVEL_ALPHA : alpha})`;
+
+  const MW_LEVEL_TABLES = {
+    lux: { stops: MW_LUX_STOPS, rgb: MW_LUX_RGB, clamp: null, unit: "lx", decimals: 0 },
+    battery: { stops: MW_BAT_CANON_STOPS, rgb: MW_BAT_CANON_RGB, clamp: [0, 100], unit: "%", decimals: 0 },
+    battery_fina: { stops: MW_BAT_FINA_STOPS, rgb: MW_BAT_FINA_RGB, clamp: [0, 100], unit: "%", decimals: 0 },
+  };
+
+  const mwLevelKind = (kind) => {
+    const k = String(kind || "").toLowerCase().trim();
+    return MW_LEVEL_ALIAS[k] || (MW_LEVEL_TABLES[k] ? k : null);
+  };
+
+  // Devolve {stops, colors, clamp} — a mesma forma que mwClimateScale, para
+  // que o consumidor tenha um caminho de pintura só. Limite SUPERIOR
+  // inclusivo: a cor é a da primeira faixa cujo limite não foi ultrapassado.
+  const mwLevelScale = (kind, alpha) => {
+    const k = mwLevelKind(kind);
+    if (!k) return null;
+    const t = MW_LEVEL_TABLES[k];
+    return {
+      stops: t.stops.slice(),
+      colors: t.rgb.map((c) => mwLevelRgba(c, alpha)),
+      clamp: t.clamp ? t.clamp.slice() : null,
+    };
+  };
+
+  // Vazio/nulo NÃO é zero. Number("") e Number(null) devolvem 0, e um sensor
+  // sem leitura acabaria pintado como 0 lx (o degrau mais escuro) ou 0 % de
+  // pilha (o mais vermelho) em vez de cair na cor de "sem leitura" do
+  // consumidor. A guarda mora aqui para nenhum consumidor ter de lembrar.
+  const mwLevelNum = (value) => {
+    if (value === null || value === undefined || value === "") return null;
+    const v = Number(value);
+    return Number.isFinite(v) ? v : null;
+  };
+
+  const mwLevelColor = (kind, value, alpha) => {
+    const s = mwLevelScale(kind, alpha);
+    if (!s) return null;
+    let v = mwLevelNum(value);
+    if (v === null) return null;
+    if (s.clamp) v = Math.min(Math.max(v, s.clamp[0]), s.clamp[1]);
+    const i = s.stops.findIndex((stop) => v <= stop);
+    return s.colors[i === -1 ? s.stops.length : i];
+  };
+  // <<< mw-level-scale v1
+
+  // >>> mw-electrical-scale v1 — fonte canônica: /Volumes/SSD-T1-01/CLAUDE-SSD/IA/lib/mw-electrical-scale/mw-electrical-scale.js
+  // Escala canônica de cor para potência, consumo, tensão e corrente.
+  // Regra: IA/rules/global/180-cores-de-grandezas-eletricas.md.
+  const MW_EL_ALPHA = 0.85;
+
+  // --- unidades ----------------------------------------------------------
+  // Normaliza para a unidade-base da grandeza: W, kWh, V, A. Devolve
+  // {value, unit, kind}; `kind` é null quando a unidade não é elétrica.
+  // Sem este passo, sensor em mV/mA/Wh cai na régua errada em silêncio.
+  const MW_EL_UNITS = {
+    w: ["power", 1, "W"], kw: ["power", 1e3, "W"],
+    va: ["power", 1, "W"], kva: ["power", 1e3, "W"],
+    wh: ["energy", 1e-3, "kWh"], kwh: ["energy", 1, "kWh"], mwh: ["energy", 1e3, "kWh"],
+    v: ["voltage", 1, "V"], mv: ["voltage", 1e-3, "V"], kv: ["voltage", 1e3, "V"],
+    a: ["current", 1, "A"], ma: ["current", 1e-3, "A"],
+  };
+  // Fora da tabela de propósito: "MW" e "mW" viram a mesma chave ao baixar a
+  // caixa (megawatt × miliwatt, fator 1e9 de diferença) e nenhuma casa tem as
+  // duas para desempatar. Unidade ambígua fica com kind null — o consumidor
+  // pinta como "sem escala" em vez de errar por 9 ordens de grandeza.
+  // Vazio/nulo NÃO é zero: Number("") e Number(null) devolvem 0, e um sensor
+  // sem leitura acabaria pintado como "0 W, desligado" ou "0 V, crítica" em
+  // vez de cair na cor de "sem leitura" do consumidor.
+  const mwElNum = (value) => {
+    if (value === null || value === undefined || value === "") return null;
+    const v = Number(value);
+    return Number.isFinite(v) ? v : null;
+  };
+  const mwElectricalUnit = (unit, value) => {
+    const u = String(unit || "").trim().toLowerCase();
+    const hit = MW_EL_UNITS[u];
+    const v = mwElNum(value);
+    if (!hit || v === null) return { value: v, unit: unit || "", kind: null };
+    return { value: v * hit[1], unit: hit[2], kind: hit[0] };
+  };
+
+  // --- TENSÃO: PRODIST módulo 8 (ANEEL) ----------------------------------
+  // Pontos de conexão em tensão nominal igual ou inferior a 1 kV. São
+  // QUATRO zonas, não cinco: acima da faixa adequada a norma vai direto para
+  // crítica — não existe "precária alta" nesta faixa de tensão.
+  //
+  //   220 V  adequada 202..231 · precária 191..201 · crítica <191 ou >231
+  //   127 V  adequada 117..133 · precária 110..116 · crítica <110 ou >133
+  //
+  // Limites SUPERIORES inclusivos (a forma que os consumidores já usam), com
+  // o mesmo truque de .99 do mw-climate-scale para não deixar vão sem dono
+  // entre 190,99 e 191.
+  const MW_EL_BLUE = "41, 55, 140";    // crítica baixa — afundou
+  const MW_EL_AMBER = "255, 166, 0";   // precária — atenção (cor de atenção da casa)
+  const MW_EL_GREEN = "67, 160, 71";   // adequada — cor de "tudo bem" da casa
+  const MW_EL_RED = "219, 68, 55";     // crítica alta — cor de problema da casa
+  const MW_PRODIST = {
+    220: { stops: [190.99, 201.99, 231], adequada: [202, 231] },
+    127: { stops: [109.99, 116.99, 133], adequada: [117, 133] },
+  };
+  const MW_PRODIST_RGB = [MW_EL_BLUE, MW_EL_AMBER, MW_EL_GREEN, MW_EL_RED];
+
+  // Célula de pilha (CR2032, AA, AAA num nó Zigbee): 3 V nominais. Não é
+  // rede elétrica e não se mede pelo PRODIST — mas chega no mesmo
+  // device_class `voltage`, então precisa de régua própria.
+  const MW_CELL_STOPS = [2.4, 2.6, 2.8, 3.0];
+  const MW_CELL_RGB = ["219, 68, 55", "255, 140, 0", "255, 166, 0", "154, 205, 50", "67, 160, 71"];
+
+  // Escolhe a régua pelo próprio valor já normalizado em V. Abaixo de 60 V
+  // não é rede de casa nenhuma: é pilha. Entre as duas nominais, ganha a
+  // mais próxima.
+  const mwVoltageNominal = (volts) => {
+    const v = Number(volts);
+    if (!Number.isFinite(v)) return null;
+    if (v < 60) return "cell";
+    return Math.abs(v - 127) <= Math.abs(v - 220) ? 127 : 220;
+  };
+
+  const mwElRgba = (triplet, alpha) =>
+    `rgba(${triplet}, ${alpha === undefined || alpha === null ? MW_EL_ALPHA : alpha})`;
+
+  const mwVoltageScale = (nominal, alpha) => {
+    if (String(nominal) === "cell") {
+      return { stops: MW_CELL_STOPS.slice(), colors: MW_CELL_RGB.map((c) => mwElRgba(c, alpha)), clamp: null };
+    }
+    const t = MW_PRODIST[Number(nominal)] || MW_PRODIST[220];
+    return { stops: t.stops.slice(), colors: MW_PRODIST_RGB.map((c) => mwElRgba(c, alpha)), clamp: null };
+  };
+
+  // --- POTÊNCIA (W) ------------------------------------------------------
+  // Degraus logarítmicos, pela mesma razão da iluminância: a casa vive
+  // embaixo (medição de 2026-09-06 em 63 sensores: p50 = 0 W, p90 = 111 W,
+  // max = 474 W) e uma régua linear até 5 kW pintaria tudo da mesma cor.
+  // O degrau `<= 0` existe para desligado ter cor própria — com p50 = 0,
+  // metade da casa cai nele, e distinguir "apagado" de "quase nada" é a
+  // informação mais útil da faixa.
+  const MW_POWER_STOPS = [0, 1, 10, 50, 200, 1000];
+  const MW_POWER_RGB = [
+    "55, 60, 78",     // 0 W — desligado
+    "86, 66, 130",    // <=1 W — vampiro de tomada
+    "128, 71, 158",   // <=10 W — LED, carregador
+    "186, 78, 145",   // <=50 W — TV, notebook
+    "226, 106, 96",   // <=200 W — geladeira, bomba pequena
+    "243, 156, 53",   // <=1 kW — ferro, cafeteira
+    "250, 205, 55",   // acima — chuveiro, forno
+  ];
+  const mwPowerScale = (alpha) => ({
+    stops: MW_POWER_STOPS.slice(),
+    colors: MW_POWER_RGB.map((c) => mwElRgba(c, alpha)),
+    clamp: null,
+  });
+
+  // --- CORRENTE (A) ------------------------------------------------------
+  // Sem faixa absoluta possível: 2 A é muito num circuito de iluminação e
+  // pouco num de chuveiro. A régua é RELATIVA ao limite do circuito (`max`,
+  // em A), nas mesmas frações da rampa de potência.
+  const MW_CURRENT_FRACTIONS = [0, 0.02, 0.1, 0.3, 0.6, 0.85];
+  const mwCurrentScale = (max, alpha) => {
+    const m = Number(max) > 0 ? Number(max) : 20;
+    return {
+      stops: MW_CURRENT_FRACTIONS.map((f) => f * m),
+      colors: MW_POWER_RGB.map((c) => mwElRgba(c, alpha)),
+      clamp: null,
+    };
+  };
+
+  // --- CONSUMO (kWh) -----------------------------------------------------
+  // Acumulado não tem faixa natural: na casa há sensores de 0 a 120.590 kWh
+  // no mesmo instante. A régua é RELATIVA a um máximo — por padrão o maior
+  // valor entre as leituras da própria tela, o que transforma a faixa numa
+  // comparação entre ambientes em vez de num julgamento absoluto.
+  // Rampa sequencial de um tom só (claro -> escuro), que é o desenho certo
+  // para grandeza acumulada e não colide com nenhuma das outras rampas.
+  const MW_ENERGY_FRACTIONS = [0, 0.2, 0.4, 0.6, 0.8];
+  const MW_ENERGY_RGB = [
+    "255, 236, 179",
+    "255, 213, 79",
+    "255, 179, 0",
+    "239, 124, 0",
+    "191, 74, 0",
+    "120, 40, 10",
+  ];
+  const mwEnergyScale = (max, alpha) => {
+    const m = Number(max) > 0 ? Number(max) : 1;
+    return {
+      stops: MW_ENERGY_FRACTIONS.map((f) => f * m),
+      colors: MW_ENERGY_RGB.map((c) => mwElRgba(c, alpha)),
+      clamp: null,
+    };
+  };
+
+  // Atalho: cor direta, para quem não quer a tabela. `opts` aceita
+  // {nominal, max, alpha}. Sempre normaliza a unidade antes.
+  const mwElectricalColor = (kind, value, unit, opts) => {
+    const o = opts || {};
+    const n = mwElectricalUnit(unit, value);
+    const k = n.kind || String(kind || "").toLowerCase();
+    if (n.value === null) return null;
+    let s = null;
+    if (k === "voltage") s = mwVoltageScale(o.nominal || mwVoltageNominal(n.value), o.alpha);
+    else if (k === "power") s = mwPowerScale(o.alpha);
+    else if (k === "current") s = mwCurrentScale(o.max, o.alpha);
+    else if (k === "energy") s = mwEnergyScale(o.max, o.alpha);
+    if (!s) return null;
+    const i = s.stops.findIndex((stop) => n.value <= stop);
+    return s.colors[i === -1 ? s.stops.length : i];
+  };
+  // <<< mw-electrical-scale v1
+
   /* ---------------------------- cor por faixa ---------------------------- */
 
   const parseColor = (str) => {
@@ -289,7 +646,20 @@
     if (!Number.isFinite(v)) return null;
     const { stops, colors } = scale;
     if (scale.clamp) v = Math.min(scale.clamp[1], Math.max(scale.clamp[0], v));
-    let band = stops.findIndex((s) => v <= s);
+    // Duas semânticas de degrau convivem na casa. Clima, iluminância, bateria
+    // e as elétricas usam limite SUPERIOR inclusivo (`v <= s`). A escala de
+    // qualidade do ar (regra 90) usa limite INFERIOR (`v >= from`): 800 ppm de
+    // CO₂ JÁ é atenção. Tratar as duas igual faria 810 ppm pintar de verde.
+    let band;
+    if (scale.lower) {
+      band = 0;
+      for (let i = 0; i < stops.length; i += 1) if (v >= stops[i]) band = i + 1;
+      // Semáforo não se interpola: entre "bom" e "atenção" não existe meio
+      // termo que signifique alguma coisa, e a regra 90 é ternária de
+      // propósito. Faixa de ar ignora o blend da escala e fica seca.
+      return colors[band];
+    }
+    band = stops.findIndex((s) => v <= s);
     if (band === -1) band = stops.length;
     if (!blend) return colors[band];
     const widths = [];
@@ -341,7 +711,16 @@
     battery: {
       label: "Bateria", icon: "mdi:battery", dc: "battery",
       unit: "%", decimals: 0,
-      scale: (a) => cached(`bat:${a}`, () => rampScale([5, 20, 40, 60, 80], [0, 100], a)),
+      // Duas réguas, nomeadas (ver IA/lib/mw-level-scale): a `fina` é a deste
+      // card desde sempre — separa "quase morta" (<=5 %) de "morrendo" e
+      // enxerga o topo da carga, que num arco-íris de 8 dispositivos é o que
+      // deixa ver qual pilha cai primeiro. A `canonica` é a do
+      // mw-ha-state-color-element. O padrão continua `fina` para não mudar a
+      // cor de nenhuma tela que já está no ar.
+      scale: (a, b) => {
+        const k = String((b && b.scale) || "fina") === "canonica" ? "battery" : "battery_fina";
+        return cached(`bat:${k}:${a}`, () => mwLevelScale(k, a));
+      },
     },
     rssi: {
       label: "RSSI", icon: "mdi:wifi", dc: "signal_strength", hint: ["_rssi", "_signal_strength"],
@@ -355,7 +734,98 @@
       scale: (a) => cached(`lqi:${a}`, () => rampScale([50, 100, 150, 200, 240], [0, 255], a)),
     },
   };
+  // --- qualidade do ar (regra 90) -----------------------------------------
+  // Adapta os degraus do bloco canônico, que são limite INFERIOR, para a
+  // forma {stops, colors} que o bandColor consome — marcados com `lower`.
+  const airScale = (kind, alpha) => cached(`air:${kind}:${alpha}`, () => {
+    const steps = MW_AQ_SCALE[kind].steps;
+    return {
+      stops: steps.slice(1).map(([from]) => from),
+      colors: steps.map(([, hex]) => mwAirRgba(hex, alpha)),
+      clamp: null,
+      lower: true,
+    };
+  });
+  const airMetric = (kind, label, icon, dc, hint, decimals) => ({
+    label, icon, dc, hint, unit: MW_AQ_SCALE[kind].unit, decimals, air: true,
+    scale: (a) => airScale(kind, a),
+  });
+
+  // Sete dos dez sensores de ar da casa NÃO têm device_class (medição de
+  // 2026-09-06): VOC e formaldeído dos Tuya 3-em-1 e o PM2.5 do purificador
+  // chegam com device_class nulo. Descoberta por classe acharia só o CO₂ —
+  // por isso estas grandezas se descobrem por PISTA no fim do id, e a pista
+  // só vale com a unidade batendo (ver `servesMetric`).
+  Object.assign(METRICS, {
+    illuminance: {
+      label: "Iluminância", icon: "mdi:brightness-5", dc: "illuminance",
+      unit: "lx", decimals: 0,
+      scale: (a) => cached(`lux:${a}`, () => mwLevelScale("lux", a)),
+    },
+    power: {
+      label: "Potência", icon: "mdi:flash", dc: "power",
+      unit: "W", decimals: 1,
+      scale: (a) => cached(`pow:${a}`, () => mwPowerScale(a)),
+    },
+    energy: {
+      label: "Consumo", icon: "mdi:lightning-bolt", dc: "energy",
+      unit: "kWh", decimals: 2, relative: true,
+      // Acumulado não tem faixa: a régua é o maior valor da própria faixa
+      // (ou `max:` no YAML). Construída UMA vez por render, não por célula.
+      scale: (a, b, st) => mwEnergyScale(num(b && b.max, (st && st.max) || 1), a),
+    },
+    voltage: {
+      label: "Tensão", icon: "mdi:sine-wave", dc: "voltage",
+      unit: "V", decimals: 1,
+      scale: (a, b) => cached(`v:${a}:${volNominal(b) || 220}`,
+        () => mwVoltageScale(volNominal(b) || 220, a)),
+      // Com nominal automático a régua é escolhida por CÉLULA: no mesmo
+      // device_class `voltage` convivem a rede (220 V) e a célula de pilha
+      // Zigbee (3 V). Sem isso toda pilha cheia pinta de sobretensão crítica.
+      cellScale: (a, b, v) => (volNominal(b) || v === null ? null
+        : cached(`v:${a}:${mwVoltageNominal(v)}`,
+          () => mwVoltageScale(mwVoltageNominal(v), a))),
+    },
+    current: {
+      label: "Corrente", icon: "mdi:current-ac", dc: "current",
+      unit: "A", decimals: 2, relative: true,
+      scale: (a, b) => cached(`cur:${a}:${num(b && b.max, 20)}`,
+        () => mwCurrentScale(num(b && b.max, 20), a)),
+    },
+    co2: airMetric("co2", "CO₂", "mdi:molecule-co2", "carbon_dioxide",
+      ["_dioxido_de_carbono", "_carbon_dioxide", "_co2"], 0),
+    tvoc: airMetric("tvoc", "TVOC", "mdi:air-filter", "volatile_organic_compounds_parts",
+      ["_vocs", "_voc", "_tvoc"], 2),
+    hcho: airMetric("hcho", "Formaldeído", "mdi:flask-outline", null,
+      ["_formaldeido", "_formaldehyde", "_hcho", "_ch2o"], 2),
+    pm25: airMetric("pm25", "PM2.5", "mdi:blur", "pm25",
+      ["_pm25", "_pm2_5", "_pm2"], 0),
+  });
+
+  // Tensão nominal declarada na faixa; vazio ou "auto" devolve null e manda
+  // escolher por célula.
+  function volNominal(band) {
+    const n = band && band.nominal;
+    if (n === undefined || n === null || n === "" || String(n) === "auto") return null;
+    return String(n) === "cell" ? "cell" : (Number(n) || null);
+  }
+
+  // Unidades que cada grandeza aceita quando a descoberta é por pista. A
+  // pista sozinha é perigosa: a casa tem
+  // `sensor.electricity_maps_intensidade_de_co2` (gCO2eq/kWh), que é a pegada
+  // de carbono da REDE ELÉTRICA e não o ar da sala.
+  const METRIC_UNITS = {
+    co2: ["ppm"], tvoc: ["ppm", "ppb", "mg/m³"], hcho: ["mg/m³", "ppm", "ppb"],
+    pm25: ["µg/m³", "ug/m³", "μg/m³", ""],
+    illuminance: ["lx", "lux"], power: ["w", "kw", "va", "kva"],
+    energy: ["wh", "kwh", "mwh"], voltage: ["v", "mv", "kv"], current: ["a", "ma"],
+  };
+
   const METRIC_KEYS = Object.keys(METRICS);
+  // Chaves antigas de entidade por seção. Continuam válidas: quem já tem
+  // `temp_entity` no YAML não precisa reescrever nada. O jeito novo é o mapa
+  // `entities: {<grandeza>: <entity_id>}`, que não cresce uma chave de topo
+  // por grandeza nova.
   const ENTITY_KEY = { temperature: "temp_entity", humidity: "hum_entity", battery: "battery_entity", rssi: "rssi_entity", lqi: "lqi_entity" };
 
   // luminância relativa (sRGB) — decide texto escuro ou claro sobre a faixa
@@ -381,13 +851,16 @@
     return (d.name_by_user || d.name || devId) + (area ? ` · ${area}` : "");
   };
 
-  // dispositivos com temperatura E/OU umidade — a fonte natural de uma seção
-  const climateDevices = (hass) => {
+  // Dispositivos que servem a alguma das grandezas pedidas — a fonte natural
+  // de uma seção. Antes eram só os de temperatura/umidade, e uma tomada com
+  // medição de potência não aparecia na lista do editor.
+  const metricDevices = (hass, metrics) => {
     if (!hass?.entities || !hass?.devices) return [];
+    const ms = (metrics && metrics.length) ? metrics : ["temperature", "humidity"];
     const ids = new Set();
     for (const id of Object.keys(hass.states)) {
       if (!id.startsWith("sensor.")) continue;
-      if (!hasClass(hass, id, "temperature") && !hasClass(hass, id, "humidity")) continue;
+      if (!ms.some((m) => servesMetric(hass, id, m))) continue;
       const d = deviceOf(hass, id);
       if (d) ids.add(d);
     }
@@ -395,6 +868,7 @@
       .map((d) => ({ value: d, label: deviceName(hass, d) }))
       .sort((a, b) => a.label.localeCompare(b.label, "pt-BR"));
   };
+  const climateDevices = (hass) => metricDevices(hass, ["temperature", "humidity"]);
 
   // Uma entidade serve à grandeza se a classe bate ou se o id termina numa das
   // pistas. Nada de "qualquer sensor do dispositivo": um dispositivo sem LQI
@@ -404,11 +878,27 @@
       && id.startsWith("sensor.") && hass.states[id])
     : []);
 
+  const unitOf = (hass, id) =>
+    String(hass.states?.[id]?.attributes?.unit_of_measurement ?? "").trim().toLowerCase();
+
+  // A pista sozinha é perigosa. A casa tem
+  // `sensor.electricity_maps_intensidade_de_co2`, que termina em "_co2" e é a
+  // pegada de carbono da REDE ELÉTRICA (gCO2eq/kWh), não o ar da sala. Ele
+  // entraria numa faixa de CO₂ e pintaria "ar excelente" com 231 — um número
+  // que não é do ar. A unidade é o que separa os dois.
+  const unitServes = (hass, id, metric) => {
+    const allowed = METRIC_UNITS[metric];
+    if (!allowed) return true;
+    const u = unitOf(hass, id);
+    return allowed.some((a) => String(a).toLowerCase() === u);
+  };
+
   const servesMetric = (hass, id, metric) => {
     const m = METRICS[metric] || {};
     if (m.dc && hasClass(hass, id, m.dc)) return true;
     const hints = m.hint ? [].concat(m.hint) : [];
-    return hints.some((h) => id.endsWith(h));
+    if (!hints.some((h) => id.endsWith(h))) return false;
+    return unitServes(hass, id, metric);
   };
 
   // Lista para o select do editor: a do dispositivo primeiro; se ele não tem
@@ -497,7 +987,8 @@
 
     // entidade de uma seção para uma grandeza: explícita > descoberta pelo device
     _entityOf(section, metric) {
-      const explicit = section[ENTITY_KEY[metric]];
+      const explicit = (section.entities && section.entities[metric])
+        || (ENTITY_KEY[metric] ? section[ENTITY_KEY[metric]] : "");
       if (explicit) return explicit;
       if (!section.device || !this._hass) return "";
       const k = `${section.device}|${metric}`;
@@ -524,17 +1015,26 @@
       }
       const id = METRIC_KEYS.map((m) => this._entityOf(section, m)).find(Boolean);
       const fn = id ? friendly(this._hass, id) : "";
-      return String(fn).replace(/\s*(temperatura|temperature|umidade|humidity|bateria|battery|rssi|lqi)\s*$/i, "").trim()
+      return String(fn).replace(/\s*(temperatura|temperature|umidade|humidity|bateria|battery|rssi|lqi|ilumin[aâ]ncia|illuminance|pot[eê]ncia|power|consumo|energy|tens[aã]o|voltage|corrente|current|co2|di[oó]xido de carbono|vocs?|tvoc|formalde[ií]do|pm2\\.?5)\s*$/i, "").trim()
         || fn || `Seção ${i + 1}`;
     }
 
+    // Devolve o texto que vai na tela E o número que vai na escala — que
+    // NÃO são a mesma coisa. A tela mostra o que a entidade reporta, na
+    // unidade dela (é regra da família: unidade vem da entidade, nunca do
+    // código). A cor usa o valor convertido para a unidade-base da grandeza,
+    // porque no mesmo device_class convivem V e mV, mA e A, Wh e kWh — e sem
+    // converter, uma pilha Zigbee de 3097 mV entra na régua da rede e pinta
+    // de sobretensão crítica.
     _value(entityId, metric) {
       const m = METRICS[metric];
       const st = entityId ? this._hass.states[entityId] : null;
-      if (!st) return { text: "—", num: null, unit: m.unit };
+      if (!st) return { text: "—", num: null, snum: null, unit: m.unit };
       const n = Number.parseFloat(st.state);
       const unit = st.attributes?.unit_of_measurement ?? m.unit;
-      if (!Number.isFinite(n)) return { text: "—", num: null, unit };
+      if (!Number.isFinite(n)) return { text: "—", num: null, snum: null, unit };
+      const conv = mwElectricalUnit(unit, n);
+      const snum = conv.kind ? conv.value : n;
       const d = num(m.decimals, 0);
       let text;
       try {
@@ -543,7 +1043,7 @@
       } catch (e) {
         text = n.toFixed(d);
       }
-      return { text, num: n, unit };
+      return { text, num: n, snum, unit };
     }
 
     // fundo da faixa: cortes secos ou degradê, conforme blend/blend_amount
@@ -551,7 +1051,11 @@
       const c = this._config;
       const n = colors.length;
       if (!n) return "transparent";
-      if (n === 1) return colors[0];
+      // Uma seção só ainda tem de sair como IMAGEM: este valor vai para
+      // `background-image`, e `background-image: rgba(...)` é CSS inválido —
+      // o navegador resolve para `none` e a tira fica sem cor nenhuma. Era
+      // assim até a v0.2.0: arco-íris de um dispositivo só nascia incolor.
+      if (n === 1) return `linear-gradient(${axis}, ${colors[0]} 0%, ${colors[0]} 100%)`;
       const f = c.blend === false ? 0 : Math.max(0, Math.min(1, num(c.blend_amount, 100) / 100));
       const pct = (x) => `${(x * 100 / n).toFixed(3)}%`;
       const parts = [`${colors[0]} 0%`];
@@ -582,16 +1086,30 @@
 
       const bandsHtml = c.bands.map((b, bi) => {
         const m = METRICS[b.metric];
-        const scale = m.scale(num(b.alpha, alpha));
+        const a = num(b.alpha, alpha);
         const showVals = b.show_values !== undefined ? b.show_values !== false : c.show_values !== false;
         const labelsHere = c.section_labels === "all"
           || (c.section_labels === "first" && bi === 0);
 
-        const cells = order.map(({ s, i }) => {
+        // Duas passadas, e a ordem importa: consumo (kWh) não tem faixa
+        // absoluta — a régua dele é o maior valor DESTA faixa. Só dá para
+        // montar a escala depois de ler todas as células. Construída uma vez
+        // por render, nunca por célula.
+        const raw = order.map(({ s, i }) => {
           const id = this._entityOf(s, b.metric);
-          const v = this._value(id, b.metric);
-          const color = bandColor(v.num, scale, c.scale_blend === true) || c.color_unavailable;
-          return { id, v, color, name: this._sectionName(s, i) };
+          return { id, v: this._value(id, b.metric), name: this._sectionName(s, i) };
+        });
+        const stats = m.relative
+          ? { max: raw.reduce((mx, x) => (x.v.snum > mx ? x.v.snum : mx), 0) || 1 }
+          : null;
+        const scale = m.scale(a, b, stats);
+
+        const cells = raw.map((x) => {
+          // Tensão com nominal automático troca de régua por célula: rede e
+          // pilha chegam no mesmo device_class.
+          const sc = (m.cellScale && m.cellScale(a, b, x.v.snum)) || scale;
+          const color = bandColor(x.v.snum, sc, c.scale_blend === true) || c.color_unavailable;
+          return { ...x, color };
         });
 
         const bg = this._strip(cells.map((x) => x.color), axis);
@@ -795,6 +1313,63 @@
 
   const COLOR_FIELDS = ["color_unavailable", "color_text_dark", "color_text_light"];
 
+  // Grandezas agrupadas pela RÉGUA que cada uma usa. O agrupamento não é
+  // enfeite: ele diz de onde vem a cor, que é a pergunta que o dono faz
+  // quando um número pinta diferente do que ele esperava.
+  const METRIC_GROUPS = [
+    ["Clima (regra 40)", ["temperature", "humidity"]],
+    ["Qualidade do ar (regra 90)", ["co2", "tvoc", "hcho", "pm25"]],
+    ["Elétrico (regra 180)", ["power", "energy", "voltage", "current"]],
+    ["Nível", ["illuminance", "battery"]],
+    ["Rádio", ["rssi", "lqi"]],
+  ];
+
+  // As grandezas que este card realmente usa, na ordem das faixas.
+  const usedMetrics = (config) => {
+    const out = [];
+    for (const b of (config && config.bands) || []) {
+      if (METRICS[b.metric] && !out.includes(b.metric)) out.push(b.metric);
+    }
+    return out.length ? out : ["temperature"];
+  };
+
+  // Campo extra da faixa, só para as grandezas que precisam de um parâmetro.
+  // Faixa que não precisa não ganha linha nenhuma — o painel continua magro.
+  const bandExtra = (b, i) => {
+    const m = b.metric;
+    if (m === "voltage") {
+      const cur = b.nominal === undefined || b.nominal === null ? "" : String(b.nominal);
+      const op = (v, t) => `<option value="${v}"${v === cur ? " selected" : ""}>${t}</option>`;
+      return `<div class="xtra"><label><span>Tensão nominal</span>
+        <select data-band="${i}" data-field="nominal">
+          ${op("", "Automático (rede ou pilha, pelo valor)")}
+          ${op("220", "220 V — PRODIST")}
+          ${op("127", "127 V — PRODIST")}
+          ${op("cell", "Célula de pilha (3 V)")}
+        </select></label></div>`;
+    }
+    if (m === "current") {
+      return `<div class="xtra"><label><span>Limite do circuito (A)</span>
+        <input type="number" min="0.1" step="0.1" data-band="${i}" data-field="max"
+          placeholder="20" value="${b.max ?? ""}"></label></div>`;
+    }
+    if (m === "energy") {
+      return `<div class="xtra"><label><span>Máximo da régua (kWh)</span>
+        <input type="number" min="0.1" step="0.1" data-band="${i}" data-field="max"
+          placeholder="o maior da faixa" value="${b.max ?? ""}"></label></div>`;
+    }
+    if (m === "battery") {
+      const cur = String(b.scale || "fina");
+      const op = (v, t) => `<option value="${v}"${v === cur ? " selected" : ""}>${t}</option>`;
+      return `<div class="xtra"><label><span>Régua da bateria</span>
+        <select data-band="${i}" data-field="scale">
+          ${op("fina", "Fina — 5/20/40/60/80 (padrão deste card)")}
+          ${op("canonica", "Canônica — 10/20/40/60 (como na planta)")}
+        </select></label></div>`;
+    }
+    return "";
+  };
+
   const ORIENTATIONS = [
     { value: "horizontal", label: "Horizontal (faixas empilhadas)" },
     { value: "vertical", label: "Vertical (faixas lado a lado)" },
@@ -984,21 +1559,27 @@
         this.appendChild(this._secEl);
       }
       const hass = this._hass;
-      const devs = hass ? climateDevices(hass) : [];
+      // A lista de dispositivos segue as grandezas do card: uma tomada com
+      // medição de potência não aparecia aqui quando só clima contava.
+      const devs = hass ? metricDevices(hass, usedMetrics(this._config)) : [];
       const secs = this._config.sections || [];
       const rows = secs.map((s, i) => {
         const opts = [`<option value="">— escolher dispositivo —</option>`].concat(
           devs.map((d) => `<option value="${esc(d.value)}"${d.value === s.device ? " selected" : ""}>${esc(d.label)}</option>`),
         ).join("");
-        const extras = METRIC_KEYS.map((m) => {
+        // Só as grandezas que este card realmente usa. Antes eram cinco
+        // fixas; com quatorze no registro, desenhar todas seria um paredão de
+        // selects — e quase todos vazios.
+        const usadas = usedMetrics(this._config);
+        const extras = usadas.map((m) => {
           const key = ENTITY_KEY[m];
-          const cur = s[key] || "";
+          const cur = (s.entities && s.entities[m]) || (key ? s[key] : "") || "";
           const list = hass ? sensorsFor(hass, s.device, m) : [];
           const o = [`<option value="">— automático —</option>`].concat(
             list.map((e) => `<option value="${esc(e.value)}"${e.value === cur ? " selected" : ""}>${esc(e.label)}</option>`),
           ).join("");
           return `<label class="ent"><span>${esc(METRICS[m].label)}</span>
-            <select data-sec="${i}" data-field="${esc(key)}">${o}</select></label>`;
+            <select data-sec="${i}" data-metric="${esc(m)}">${o}</select></label>`;
         }).join("");
         return `<div class="row">
           <div class="head">
@@ -1022,27 +1603,8 @@
         <button class="add" data-add-sec="1">+ adicionar seção</button>`;
       this._secEl.querySelectorAll("details.adv").forEach((d, i) => { d.open = !!abertos[i]; });
       this._secEl.querySelectorAll("select[data-sec], input[data-sec]").forEach((el) => {
-        const ev = el.tagName === "INPUT" ? "change" : "change";
-        el.addEventListener(ev, () => {
-          const i = Number(el.dataset.sec);
-          const field = el.dataset.field;
-          const secs2 = this._config.sections.map((x) => ({ ...x }));
-          const v = el.value;
-          if (v === "") delete secs2[i][field]; else secs2[i][field] = v;
-          // trocar de dispositivo invalida as entidades do dispositivo antigo
-          if (field === "device") {
-            for (const m of METRIC_KEYS) {
-              const k = ENTITY_KEY[m];
-              if (secs2[i][k] && deviceOf(this._hass, secs2[i][k]) !== v) delete secs2[i][k];
-            }
-          }
-          this._config = { ...this._config, sections: secs2 };
-          this._emit();
-          this._seal();
-          // só a troca de dispositivo muda as listas de entidades; repintar por
-          // um nome digitado tiraria o foco do campo à toa
-          if (field === "device") { this._sigSec = null; this._paint("sections"); }
-        });
+        el.addEventListener("change", () =>
+          this._secFieldChanged(Number(el.dataset.sec), el.dataset.field, el.dataset.metric, el.value));
       });
       this._secEl.querySelectorAll("button[data-up],button[data-down],button[data-del],button[data-add-sec]")
         .forEach((b) => b.addEventListener("click", (ev) => {
@@ -1078,8 +1640,13 @@
       }
       const bands = this._config.bands || [];
       const rows = bands.map((b, i) => {
-        const opts = METRIC_KEYS.map((m) =>
-          `<option value="${m}"${m === b.metric ? " selected" : ""}>${esc(METRICS[m].label)}</option>`).join("");
+        // Quatorze grandezas numa lista chapada viram um paredão. Agrupadas
+        // pela régua que cada uma usa, a lista também ENSINA de onde vem a cor.
+        const opts = METRIC_GROUPS.map(([grupo, chaves]) => {
+          const inner = chaves.filter((m) => METRICS[m]).map((m) =>
+            `<option value="${m}"${m === b.metric ? " selected" : ""}>${esc(METRICS[m].label)}</option>`).join("");
+          return inner ? `<optgroup label="${esc(grupo)}">${inner}</optgroup>` : "";
+        }).join("");
         return `<div class="row"><div class="head">
           <b>${i + 1}</b>
           <select data-band="${i}" data-field="metric">${opts}</select>
@@ -1088,7 +1655,7 @@
           <button data-bup="${i}" title="subir">▲</button>
           <button data-bdown="${i}" title="descer">▼</button>
           <button data-bdel="${i}" title="remover">✕</button>
-        </div></div>`;
+        </div>${bandExtra(b, i)}</div>`;
       }).join("");
       this._bandEl.innerHTML = `
         <summary>Faixas (${bands.length}) — grandeza e altura</summary>
@@ -1096,16 +1663,8 @@
         ${rows}
         <button class="add" data-add-band="1">+ adicionar faixa</button>`;
       this._bandEl.querySelectorAll("select[data-band], input[data-band]").forEach((el) => {
-        el.addEventListener("change", () => {
-          const i = Number(el.dataset.band);
-          const bands2 = this._config.bands.map((x) => ({ ...x }));
-          const v = el.value;
-          if (v === "") delete bands2[i][el.dataset.field];
-          else bands2[i][el.dataset.field] = el.dataset.field === "height" ? Number(v) : v;
-          this._config = { ...this._config, bands: bands2 };
-          this._emit();
-          this._seal(); // a linha já mostra a escolha — repintar só fecharia o menu
-        });
+        el.addEventListener("change", () =>
+          this._bandFieldChanged(Number(el.dataset.band), el.dataset.field, el.value));
       });
       this._bandEl.querySelectorAll("button[data-bup],button[data-bdown],button[data-bdel],button[data-add-band]")
         .forEach((b) => b.addEventListener("click", (ev) => {
@@ -1146,6 +1705,70 @@
       delete data.bands;
       for (const k of Object.keys(data)) if (data[k] === "") delete data[k];
       this._form.data = data;
+    }
+
+    // A decisão de um campo de faixa, separada do DOM: é ela que o probe
+    // consegue exercitar (o dublê de DOM da bancada não devolve elementos).
+    _bandFieldChanged(i, campo, v) {
+      const bands2 = this._config.bands.map((x) => ({ ...x }));
+      if (!bands2[i]) return;
+      if (v === "") delete bands2[i][campo];
+      else bands2[i][campo] = (campo === "height" || campo === "max") ? Number(v) : v;
+      // Grandeza nova zera os parâmetros da antiga: o `max` de um circuito de
+      // corrente não quer dizer nada numa faixa de tensão, e ficaria no YAML
+      // sem ninguém ver.
+      if (campo === "metric") {
+        delete bands2[i].max;
+        delete bands2[i].nominal;
+        delete bands2[i].scale;
+      }
+      this._config = { ...this._config, bands: bands2 };
+      this._emit();
+      this._seal(); // a linha já mostra a escolha — repintar só fecharia o menu
+      // Grandeza nova muda o campo extra da faixa E a lista de entidades das
+      // seções (que agora só mostra as grandezas em uso). Repintar é preciso,
+      // mas `_paint` respeita o `_busy`: com o menu ainda aberto a pintura
+      // fica pendente e só sai no focusout — que é a guarda que existe desde
+      // o PR #1 para o select não fechar sozinho na mão do dono.
+      if (campo === "metric") {
+        this._sigBand = null;
+        this._sigSec = null;
+        this._paint("bands", "sections");
+      }
+    }
+
+    // Idem para um campo de seção. `metric` preenchido = escolha de entidade
+    // (grava no mapa `entities`); senão é `device` ou `name`.
+    _secFieldChanged(i, field, metric, v) {
+      const secs2 = this._config.sections.map((x) => ({ ...x }));
+      if (!secs2[i]) return;
+      if (metric) {
+        // O jeito novo grava em `entities`; a chave antiga é apagada para não
+        // ficarem duas verdades sobre a mesma célula no mesmo YAML.
+        const ents = { ...(secs2[i].entities || {}) };
+        if (v === "") delete ents[metric]; else ents[metric] = v;
+        if (ENTITY_KEY[metric]) delete secs2[i][ENTITY_KEY[metric]];
+        if (Object.keys(ents).length) secs2[i].entities = ents;
+        else delete secs2[i].entities;
+      } else if (v === "") delete secs2[i][field];
+      else secs2[i][field] = v;
+      // trocar de dispositivo invalida as entidades do dispositivo antigo
+      if (field === "device") {
+        const ents = { ...(secs2[i].entities || {}) };
+        for (const m of METRIC_KEYS) {
+          const k = ENTITY_KEY[m];
+          if (k && secs2[i][k] && deviceOf(this._hass, secs2[i][k]) !== v) delete secs2[i][k];
+          if (ents[m] && deviceOf(this._hass, ents[m]) !== v) delete ents[m];
+        }
+        if (Object.keys(ents).length) secs2[i].entities = ents;
+        else delete secs2[i].entities;
+      }
+      this._config = { ...this._config, sections: secs2 };
+      this._emit();
+      this._seal();
+      // só a troca de dispositivo muda as listas de entidades; repintar por um
+      // nome digitado tiraria o foco do campo à toa
+      if (field === "device") { this._sigSec = null; this._paint("sections"); }
     }
 
     _paintColors() {
@@ -1216,6 +1839,11 @@
 
   const editorCss = `
     summary{cursor:pointer;font-weight:500;}
+  .xtra{display:flex;gap:6px;margin:4px 0 2px 26px;}
+  .xtra label{display:flex;align-items:center;gap:6px;flex:1;font-size:12px;
+    color:var(--secondary-text-color);}
+  .xtra label span{white-space:nowrap;}
+  .xtra select,.xtra input{flex:1;min-width:0;}
     .row{border-top:1px solid var(--divider-color);padding:6px 0;}
     .row:first-of-type{border-top:none;}
     .head{display:flex;gap:6px;align-items:center;}

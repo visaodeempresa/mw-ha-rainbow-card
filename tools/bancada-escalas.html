@@ -1,0 +1,161 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>bancada mw-rainbow-card — as escalas</title>
+<style>
+  body{font:14px system-ui;margin:0;padding:20px;background:var(--bg,#101012);color:var(--fg,#eee)}
+  body.claro{--bg:#e9e7e2;--fg:#1a1a1a}
+  h3{margin:26px 0 4px;font-size:13px;letter-spacing:.08em;text-transform:uppercase;opacity:.65}
+  p.nota{margin:0 0 12px;font-size:12px;opacity:.55;max-width:70ch}
+  .grade{display:grid;grid-template-columns:repeat(auto-fill,minmax(330px,1fr));gap:22px}
+  .cel{display:flex;flex-direction:column;gap:6px}
+  .cap{font-size:11px;opacity:.6}
+  button{font:inherit;padding:6px 12px;border-radius:8px;border:1px solid #8886;background:#8882;color:inherit;cursor:pointer}
+</style>
+<button onclick="document.body.classList.toggle('claro')">alternar tema da página</button>
+<div id="host"></div>
+<script src="../dist/mw-rainbow-card.js"></script>
+<script>
+/* Bancada visual das escalas — a que responde "ficou bom?" sem subir nada.
+ * Não abre por file:// (o navegador recusa o módulo vizinho):
+ *     python3 -m http.server 8765   →  http://localhost:8765/tools/bancada-escalas.html
+ *
+ * Os valores NÃO são inventados: são as leituras reais do BASE-ALFA-01 no
+ * levantamento de 2026-09-06, com as unidades e os device_class exatamente
+ * como o /api/states devolve — device_class nulo incluído, que é o caso de
+ * sete dos dez sensores de ar da casa.
+ */
+const S = (state, attrs) => ({ state: String(state), attributes: attrs || {} });
+
+// Um dispositivo por degrau, para a faixa mostrar a escala inteira de uma vez.
+const escadas = {
+  power:      [0, 0.6, 6, 30, 120, 600, 3000],
+  voltage:    [180, 195, 210, 223.9, 228, 235, 245],
+  current:    [0, 0.3, 1.5, 4, 9, 15, 19],
+  energy:     [0, 12, 30, 55, 80, 98],
+  illuminance:[0, 3, 10, 50, 180, 500, 1200],
+  battery:    [3, 12, 30, 50, 70, 95],
+  co2:        [368, 700, 810, 1000, 1300, 1800],
+  tvoc:       [0.05, 0.2, 0.35, 0.5, 0.7, 1.2],
+  hcho:       [0.005, 0.03, 0.06, 0.085, 0.12, 0.2],
+  pm25:       [2, 8, 14, 25, 40, 90],
+};
+const un = {
+  power: "W", voltage: "V", current: "A", energy: "kWh", illuminance: "lx",
+  battery: "%", co2: "ppm", tvoc: "ppm", hcho: "mg/m³", pm25: "µg/m³",
+};
+const dc = {
+  power: "power", voltage: "voltage", current: "current", energy: "energy",
+  illuminance: "illuminance", battery: "battery", co2: "carbon_dioxide",
+};
+
+const states = {}, entities = {}, devices = {};
+Object.entries(escadas).forEach(([m, vals]) => vals.forEach((v, i) => {
+  const dev = `${m}${i}`, id = `sensor.${m}${i}_${m}`;
+  states[id] = S(v, dc[m] ? { device_class: dc[m], unit_of_measurement: un[m] } : { unit_of_measurement: un[m] });
+  entities[id] = { device_id: dev };
+  devices[dev] = { name: `${v} ${un[m]}` };
+}));
+
+// --- os casos que a escala existe para não errar -------------------------
+states["sensor.pilha_cheia_voltage"] = S(3097, { device_class: "voltage", unit_of_measurement: "mV" });
+states["sensor.pilha_fraca_voltage"] = S(2350, { device_class: "voltage", unit_of_measurement: "mV" });
+states["sensor.rede_kw_power"] = S(3.5, { device_class: "power", unit_of_measurement: "kW" });
+states["sensor.tomada_ma_current"] = S(270, { device_class: "current", unit_of_measurement: "mA" });
+states["sensor.purificador_de_ar_da_sala_pm25"] = S(5, {});
+states["sensor.electricity_maps_intensidade_de_co2"] = S(231, { unit_of_measurement: "gCO2eq/kWh" });
+["pilha_cheia_voltage", "pilha_fraca_voltage", "rede_kw_power", "tomada_ma_current"].forEach((n, i) => {
+  entities[`sensor.${n}`] = { device_id: `caso${i}` };
+  devices[`caso${i}`] = { name: n.replace(/_/g, " ") };
+});
+entities["sensor.purificador_de_ar_da_sala_pm25"] = { device_id: "purificador" };
+entities["sensor.electricity_maps_intensidade_de_co2"] = { device_id: "purificador" };
+devices.purificador = { name: "Purificador da sala" };
+
+const hass = { states, entities, devices, areas: {}, locale: { language: "pt-BR" }, callService() {} };
+
+const host = document.getElementById("host");
+const cartao = (cap, cfg) => {
+  const cel = document.createElement("div");
+  cel.className = "cel";
+  const el = document.createElement("mw-rainbow-card");
+  el.setConfig(cfg);
+  el.hass = hass;
+  el.shadowRoot.innerHTML += "<style>ha-card{display:block}ha-icon{display:none}</style>";
+  const legenda = document.createElement("div");
+  legenda.className = "cap";
+  legenda.textContent = cap;
+  cel.append(el, legenda);
+  return cel;
+};
+const secao = (titulo, nota, itens) => {
+  const h = document.createElement("h3"); h.textContent = titulo;
+  const p = document.createElement("p"); p.className = "nota"; p.textContent = nota;
+  const g = document.createElement("div"); g.className = "grade";
+  itens.forEach(([cap, cfg]) => g.appendChild(cartao(cap, cfg)));
+  host.append(h, p, g);
+};
+// Uma faixa com um dispositivo por degrau: a escala inteira numa tira só.
+const escada = (m, extra) => ({
+  name: `${m} — a escala inteira`,
+  sections: escadas[m].map((_, i) => ({ device: `${m}${i}` })),
+  bands: [Object.assign({ metric: m }, extra || {})],
+  blend: false, band_height: 40, section_labels: "all", label_size: 9,
+});
+
+secao("Elétrico — regra 180 (PRODIST para tensão)",
+  "A rampa é roxo→âmbar de propósito: sem verde e sem azul-frio, para ninguém ler uma planta elétrica como se fosse térmica. Tensão é a exceção — ali a leitura é mesmo bom/atenção/problema, e quem manda nos degraus é a norma.", [
+  ["Potência — 0 W tem cor própria (a mediana da casa é 0)", escada("power")],
+  ["Tensão — as 4 zonas do PRODIST em 220 V", escada("voltage", { nominal: 220 })],
+  ["Corrente — relativa ao circuito (20 A)", escada("current")],
+  ["Consumo — relativo ao maior da própria faixa", escada("energy")],
+]);
+
+secao("Qualidade do ar — regra 90",
+  "Semáforo de três degraus, com as cores do próprio HA. O degrau é limite INFERIOR: 800 ppm de CO₂ JÁ é atenção. Semáforo não se interpola — estas faixas ignoram o scale_blend.", [
+  ["CO₂ — vira âmbar em 800 e vermelho em 1200", escada("co2")],
+  ["TVOC (ppm, como os Tuya da casa reportam)", escada("tvoc")],
+  ["Formaldeído (mg/m³)", escada("hcho")],
+  ["PM2.5 (µg/m³)", escada("pm25")],
+]);
+
+secao("Nível — lux e as duas réguas de bateria",
+  "A escala de luz vai de azul-noite a âmbar de sol, e não é a rampa de temperatura de propósito. A bateria tem duas réguas nomeadas: a fina (deste card) e a canônica (a da planta).", [
+  ["Iluminância — a vida útil está toda abaixo de 200 lx", escada("illuminance")],
+  ["Bateria — régua FINA (padrão deste card)", escada("battery", { scale: "fina" })],
+  ["Bateria — régua CANÔNICA (a do mw-state-color-element)", escada("battery", { scale: "canonica" })],
+]);
+
+secao("Os erros que estas escalas existem para não cometer",
+  "Cada cartão aqui é um teste visual de uma armadilha real da casa.", [
+  ["mV: pilha cheia e pilha fraca — NÃO é sobretensão da rede", {
+    name: "pilha em mV, com nominal automático",
+    sections: [{ device: "caso0" }, { device: "caso1" }],
+    bands: [{ metric: "voltage" }], blend: false, section_labels: "all", band_height: 40 }],
+  ["o mesmo mV com nominal FIXO em 220 — aí sim vira crítica", {
+    name: "nominal forçado",
+    sections: [{ device: "caso0" }, { device: "caso1" }],
+    bands: [{ metric: "voltage", nominal: 220 }], blend: false, section_labels: "all", band_height: 40 }],
+  ["kW e mA: a tela mostra a unidade da entidade, a cor usa a base", {
+    name: "unidades misturadas",
+    sections: [{ device: "caso2" }, { device: "caso3" }],
+    bands: [{ metric: "power" }, { metric: "current" }], blend: false, section_labels: "all", band_height: 40 }],
+  ["purificador: só tem PM2.5 — o CO₂ fica cinza e honesto", {
+    name: "descoberta estrita",
+    sections: [{ device: "purificador" }],
+    bands: [{ metric: "pm25" }, { metric: "co2" }], blend: false, section_labels: "all", band_height: 40 }],
+]);
+
+secao("O arco-íris de verdade — a casa numa tira só",
+  "É para isto que as escalas servem: várias grandezas do mesmo ambiente, empilhadas, com a costura entre as seções ligada.", [
+  ["clima + ar + elétrico, com papel e relevo", {
+    name: "REINO DO DENDÊ — leitura completa",
+    sections: [{ device: "co20" }, { device: "co21" }, { device: "co22" }, { device: "co23" }],
+    bands: [{ metric: "co2" }, { metric: "tvoc" }, { metric: "hcho" }, { metric: "pm25" }],
+    paper_color: "paper", depth: "3d", band_height: 30 }],
+  ["o mesmo, no papel de noite", {
+    name: "REINO DO DENDÊ — leitura completa",
+    sections: [{ device: "co20" }, { device: "co21" }, { device: "co22" }, { device: "co23" }],
+    bands: [{ metric: "co2" }, { metric: "tvoc" }, { metric: "hcho" }, { metric: "pm25" }],
+    paper_color: "blue-6", paper_dark: true, depth: "3d", band_height: 30 }],
+]);
+</script>
