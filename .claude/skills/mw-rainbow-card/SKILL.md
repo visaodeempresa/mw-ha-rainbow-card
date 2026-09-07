@@ -1,13 +1,13 @@
 ---
 name: mw-rainbow-card
-description: Mexer no MW Rainbow Card do Home Assistant (custom:mw-rainbow-card) — o arco-íris de ambientes, com seções por dispositivo × faixas de temperatura, umidade, bateria, RSSI e LQI. Use quando o Maycon falar em "arco-íris", "régua de ambientes", "a faixa da casa inteira", "cor de papel no arco-íris", "aspecto 3D nesse card", "o card não bate com os button-card", "o menu do editor fecha sozinho", ou quando pedir grandeza nova, sentido novo ou papel novo neste card.
+description: Mexer no MW Rainbow Card do Home Assistant (custom:mw-rainbow-card) — o arco-íris de ambientes, com seções por dispositivo × faixas de temperatura, umidade, qualidade do ar (CO₂, TVOC, formaldeído, PM2.5), potência, consumo, tensão, corrente, iluminância, bateria, RSSI e LQI, mais a faixa que COMANDA luz, tomada, ventilador e cortina. Use quando o Maycon falar em "arco-íris", "régua de ambientes", "a faixa da casa inteira", "cor de papel no arco-íris", "aspecto 3D nesse card", "o card não bate com os button-card", "o menu do editor fecha sozinho", "quero comandar pelo arco-íris", "arrastar para regular o brilho", "a pilha aparece como sobretensão", "a faixa de VOC está toda cinza", ou quando pedir grandeza nova, sentido novo ou papel novo neste card.
 ---
 
 # MW Rainbow Card
 
 Arco-íris de ambientes: **N seções** (uma por dispositivo) × **N faixas**
-(uma por grandeza). Arquivo único, sem build: `dist/mw-rainbow-card.js` é
-fonte **e** artefato.
+(uma por grandeza) — e, desde 06/09/2026, uma faixa que **comanda**. Arquivo
+único, sem build: `dist/mw-rainbow-card.js` é fonte **e** artefato.
 
 Para o ciclo de fábrica de card em geral (geometria, `ha-form`, deploy de
 teste, cache do HACS) a skill é a `ha-lovelace-card-factory`. Aqui é só o que
@@ -26,6 +26,7 @@ teste, cache do HACS) a skill é a `ha-lovelace-card-factory`. Aqui é só o que
 ```bash
 node --check dist/mw-rainbow-card.js     # sintaxe
 node tools/probe.js                      # card + editor fora do navegador
+node tools/gerar-imagens.js              # regera as imagens do README do card
 IA/tools/check-embeds.sh                 # blocos de IA/lib/ batem byte a byte
 python3 -m http.server 8765              # bancadas (ver abaixo)
 ```
@@ -36,15 +37,71 @@ dispara o auto-release → o HACS enxerga.
 
 Bancadas (nenhuma abre por `file://` — o navegador recusa o módulo vizinho):
 
+- `tools/bancada-editor.html` — o editor e o **filtro da lista de
+  dispositivos** nos quatro casos que importam.
+- `tools/bancada-escalas.html` — todas as escalas degrau a degrau **e os quatro
+  erros que elas existem para não cometer** (pilha em mV, unidades misturadas,
+  descoberta estrita, semáforo do ar).
+- `tools/bancada-controle.html` — o fader dirigível com o mouse; as chamadas de
+  serviço são **escritas na tela**, não enviadas.
 - `tools/bancada-papel.html` — os papéis × os três relevos, em página clara e
   escura. É o que responde "ficou bom?" sem subir nada.
 - `tools/bancada.html` — o `<select>` do editor sob enxurrada de `hass`.
+
+⚠️ **Bancada em aba oculta engana:** o `requestAnimationFrame` congela quando a
+página não desenha, então a pintura otimista do arrasto não acontece e o toque
+longo dispara. Não é bug do card — é a aba. Conferir com a aba visível, ou por
+evento sintético (`new PointerEvent(...)`), que foi como o fader foi provado.
+
+## As quatorze grandezas, e de onde vem a régua de cada uma
+
+**O card é consumidor das escalas, não dono delas.** Escala se edita na fonte
+canônica em `IA/lib/`, nunca na cópia local — depois `check-embeds.sh --fix`.
+
+| grandeza | régua | fonte |
+|---|---|---|
+| `temperature` `humidity` | clima | `mw-climate-scale v1` · regra 40 |
+| `co2` `tvoc` `hcho` `pm25` | semáforo | `mw-air-quality-scale v1` · regra 90 |
+| `power` `energy` `voltage` `current` | elétrico | `mw-electrical-scale v1` · regra **180** |
+| `illuminance` `battery` | nível | `mw-level-scale v1` |
+| `rssi` `lqi` | rampa local | só aqui (não é canônica) |
+| `control` | o estado da entidade | — |
+
+Parâmetros por faixa: `nominal` (tensão), `max` (corrente/consumo),
+`scale` (bateria: `fina` padrão ou `canonica`), `confirm` (controle).
+
+## A faixa que comanda (`metric: control`)
+
+Toque liga/desliga · arrastar ajusta o nível · segurar parado abre o
+`more-info`. Domínios: `light`, `switch`, `fan`, `cover`, `input_boolean`.
+
+O que **não** se mexe sem entender:
+
+- **`_grab`** trava o `set hass` enquanto o dedo está na tela, e o `_respirar()`
+  segura 700 ms depois de soltar. Sem os dois, o eco do HA desfaz o gesto no
+  meio (é o "o cursor volta sozinho").
+- **Serviço só no soltar.** Durante o arrasto não sai chamada nenhuma.
+- **Um listener por evento, no shadow root**, pendurado uma vez. Nunca voltar a
+  pendurar por célula — eram 48 recriados a cada leitura que chegava.
+- **O véu anda por `transform`.** `width`/`left` forçam layout a cada quadro.
+- **Só a célula que arrasta leva `touch-action: none`.**
 
 ## O que é próprio deste card
 
 - **Seção = dispositivo.** As entidades saem por descoberta a partir do
   `device`, e a descoberta é **estrita**: dispositivo sem LQI não empresta a
   temperatura para a faixa de LQI. Existe teste para isso no probe.
+- **Entidade explícita mora em `entities: {<grandeza>: <id>}`.** As cinco
+  chaves antigas (`temp_entity`…) continuam lidas, mas não nascem mais.
+- **Duas semânticas de degrau.** Clima, nível e elétrico usam limite
+  **superior** (`v <= s`); qualidade do ar usa limite **inferior**
+  (`v >= from`) — 800 ppm de CO₂ **já é** atenção. O `bandColor` conhece as
+  duas, e a de ar nunca interpola.
+- **Unidade: a tela mostra uma coisa, a cor usa outra.** A célula escreve o que
+  a entidade reporta (3097 mV); a cor usa a unidade-base (3,097 V).
+- **Cor = escala canônica da casa.** Faixa **seca** por padrão — é assim que os
+  `button-card` pintam. `scale_blend` interpola dentro da escala; `blend`
+  costura uma seção na vizinha. São coisas diferentes.
 - **`device_filter` é só do editor** (padrão `clima`, que é o que o card
   sempre fez e o que torna a montagem prática). Duas garantias que não se
   quebram: dispositivo **já escolhido** numa seção fica na lista mesmo fora do
@@ -52,10 +109,6 @@ Bancadas (nenhuma abre por `file://` — o navegador recusa o módulo vizinho):
   escondendo em vez de trocar o filtro sozinho. Filtro cuja grandeza não
   existe no build **não vira opção** — resolveria para lista vazia e pareceria
   bug (é assim que «comandáveis» aparece só quando a faixa de comando existe).
-- **Cor = escala canônica da casa** (`mw-climate-scale v1`, regra global 40).
-  Faixa **seca** por padrão — é assim que os `button-card` pintam, e é o que
-  faz o arco-íris bater com o resto da tela. `scale_blend` interpola dentro da
-  escala; `blend` costura uma seção na vizinha. São coisas diferentes.
 - **Papel e relevo** (desde 25/08/2026): `paper_color` (49 tons + creme +
   `none`), `paper_dark` (a mesma chave na rampa de noite) e `depth`
   (`flat` | `soft` | `3d`). Os números do `3d` são os do MW Power Button
@@ -65,6 +118,15 @@ Bancadas (nenhuma abre por `file://` — o navegador recusa o módulo vizinho):
 
 | Sintoma | Causa | Correção |
 |---|---|---|
+| **Toda pilha Zigbee cheia** pintando de «sobretensão crítica» | 3097 **mV** lidos como 3097 V | normalizar a unidade antes da escala (`mwElectricalUnit`); abaixo de 60 V a régua é de **pilha** |
+| Faixa de **VOC / formaldeído / PM2.5 toda cinza** | sete dos dez sensores de ar da casa **não têm `device_class`** | esses se descobrem por **pista no fim do id + unidade**, nunca por classe |
+| Faixa de CO₂ marcando **231 gCO2eq/kWh** | o `sensor.electricity_maps_intensidade_de_co2` termina em `_co2` e é a pegada de carbono da **rede** | a pista só vale com a unidade batendo (`ppm`). Há teste no probe com esse entity_id |
+| **810 ppm de CO₂ pintando verde** | os degraus de ar são limite **inferior** | `scale.lower`; não "uniformizar" com as outras escalas |
+| Faixa de **kWh toda da mesma cor** | um sensor de *total de vida* (120.590 kWh) esmaga os outros na normalização | `max:` explícito, ou não misturar total de vida com consumo do dia |
+| O **cursor volta sozinho** ao soltar | `_grab`/`_respirar` não seguram o `set hass` | os dois são obrigatórios; o eco do HA chega depois da chamada |
+| **A tela para de rolar** em cima do card no celular | `touch-action: none` vazou para as células de leitura | ele mora só em `.cell.ctl.arr` |
+| Arrasto **lento** abrindo o `more-info` em vez de regular | o toque longo disparava aos 500 ms antes do movimento chegar | o hold morre no **primeiro** movimento, antes do limiar de 5 px |
+| Arco-íris de **um dispositivo só saindo sem cor** | `background-image: rgba(...)` é CSS inválido → `none` | corrigido em 06/09/2026; havia teste **fixando o bug** como esperado |
 | A **tomada não aparece** na lista de dispositivos do editor | o filtro padrão é `clima` | trocar para «As grandezas deste card» — o editor já avisa quantos está escondendo |
 | Trocar o filtro **esvaziou o select** de uma seção montada | não é para acontecer: há rede de segurança | dispositivo em uso entra na lista marcado «fora do filtro»; se sumiu, o `_dispositivos()` regrediu |
 | O menu do `<select>` do editor **fecha sozinho** enquanto o dono escolhe o dispositivo | o HA empurra um `hass` a cada leitura que chega, e o painel de seções era refeito por `innerHTML` em cima do campo aberto | o editor só repinta quando o **registro** muda (`sameRegistry`) e nunca com campo em foco (`_busy`); pintura pendente sai no `focusout`. Há teste no probe — não mexa nisso sem rodá-lo |
@@ -83,7 +145,7 @@ Bancadas (nenhuma abre por `file://` — o navegador recusa o módulo vizinho):
 node tools/probe.js
 ```
 
-Esperado: a última linha é `tudo ok` e o `exit 0`. Qualquer `FAIL` imprime o
+Esperado: **188** `ok`, a última linha `tudo ok` e o `exit 0`. Qualquer `FAIL` imprime o
 começo do HTML gerado — leia o HTML antes de mexer no teste.
 
 E, no destino (regra 30), depois da release:

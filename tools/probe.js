@@ -16,6 +16,10 @@ global.HTMLElement = class {
   attachShadow() {
     this.shadowRoot = {
       innerHTML: "",
+      // O shadowRoot de verdade escuta eventos — é nele que o card pendura o
+      // listener delegado. Sem isto o dublê não representa o navegador.
+      _ouvintes: {},
+      addEventListener(t, f) { (this._ouvintes[t] = this._ouvintes[t] || []).push(f); },
       querySelector: () => stub,
       querySelectorAll: () => [],
     };
@@ -81,6 +85,18 @@ const hass = {
     // A armadilha: termina em "_co2" e NÃO é o ar da sala — é a pegada de
     // carbono da rede elétrica.
     "sensor.electricity_maps_intensidade_de_co2": S(231, { unit_of_measurement: "gCO2eq/kWh" }),
+
+    // --- a faixa que comanda
+    "light.mesa": S("on", { brightness: 128, supported_color_modes: ["brightness"], friendly_name: "Mesa" }),
+    "light.sala_colorida": S("on", { brightness: 255, rgb_color: [255, 60, 30], supported_color_modes: ["rgb"] }),
+    "light.quente": S("on", { brightness: 200, color_temp_kelvin: 2200, supported_color_modes: ["color_temp"] }),
+    "light.apagada": S("off", { supported_color_modes: ["brightness"] }),
+    "light.sem_brilho": S("on", { supported_color_modes: ["onoff"] }),
+    "switch.tomada": S("on", {}),
+    "switch.tomada_off": S("off", {}),
+    "fan.ventilador": S("on", { percentage: 66 }),
+    "cover.cortina": S("open", { current_position: 40 }),
+    "input_boolean.modo_festa": S("off", {}),
   },
   entities: {
     "sensor.sala_temperatura": { device_id: "dev1" },
@@ -103,6 +119,11 @@ const hass = {
     "sensor.qualidade_do_ar_da_cozinha_formaldeido": { device_id: "dev5" },
     "sensor.purificador_de_ar_da_sala_pm25": { device_id: "dev6" },
     "sensor.electricity_maps_intensidade_de_co2": { device_id: "dev6" },
+    "light.mesa": { device_id: "dev7" },
+    "switch.tomada": { device_id: "dev7" },
+    "light.sala_colorida": { device_id: "dev8" },
+    "fan.ventilador": { device_id: "dev9" },
+    "cover.cortina": { device_id: "dev10" },
   },
   devices: {
     dev1: { name: "Sensor da sala", area_id: "a1" },
@@ -111,6 +132,10 @@ const hass = {
     dev4: { name: "Tomada da sala" },
     dev5: { name: "Qualidade do ar da cozinha" },
     dev6: { name: "Purificador da sala" },
+    dev7: { name: "Luz da mesa" },
+    dev8: { name: "Luz colorida" },
+    dev9: { name: "Ventilador" },
+    dev10: { name: "Cortina" },
   },
   areas: { a1: { name: "Sala" } },
   locale: { language: "pt-BR" },
@@ -644,6 +669,157 @@ console.log("fundo da tira é sempre uma imagem (regressão da v0.2.0):");
 });
 
 
+/* ====================== a faixa que comanda (fader) ====================== */
+
+// Uma célula de mentira, com a caixa que o navegador daria.
+const celulaFalsa = (w, h) => {
+  const classes = new Set(["cell", "ctl", "arr"]);
+  const veu = { style: {} };
+  const val = { textContent: "" };
+  return {
+    dataset: { entity: "light.mesa" },
+    classList: { add: (c) => classes.add(c), remove: (c) => classes.delete(c),
+      contains: (c) => classes.has(c) },
+    getBoundingClientRect: () => ({ left: 0, top: 0, width: w, height: h }),
+    querySelector: (q) => (q === ".veu" ? veu : q === ".val" ? val : null),
+    addEventListener() {}, removeEventListener() {},
+    setPointerCapture() {}, releasePointerCapture() {},
+    _veu: veu, _val: val,
+  };
+};
+const cardCtl = (cfg) => {
+  const el = new reg["mw-rainbow-card"]();
+  el.setConfig(cfg);
+  el.hass = hass;
+  return el;
+};
+
+console.log("controle: descoberta e leitura da célula:");
+const ctlHtml = mk({ sections: [{ device: "dev7" }], bands: [{ metric: "control" }] });
+check("acha a entidade controlável do dispositivo (luz antes de tomada)",
+  ctlHtml.includes('data-entity="light.mesa"'), ctlHtml.slice(0, 200));
+check("a célula de controle é marcada como tal", ctlHtml.includes('class="cell ctl arr"'));
+check("e traz o véu do nível", ctlHtml.includes('class="veu"'));
+check("luz a 128/255 mostra 50%", ctlHtml.includes(">50<"));
+check("o véu cobre a metade apagada", ctlHtml.includes("scaleX(0.498)") || ctlHtml.includes("scaleX(0.502)"),
+  (/scaleX\([\d.]+\)/.exec(ctlHtml) || [""])[0]);
+const ctlOff = mk({ sections: [{ entities: { control: "light.apagada" } }], bands: [{ metric: "control" }] });
+check("luz apagada mostra 'Desligado' e o véu inteiro",
+  ctlOff.includes("Desligado") && ctlOff.includes("scaleX(1.000)"));
+const semNivel = mk({ sections: [{ entities: { control: "switch.tomada" } }], bands: [{ metric: "control" }] });
+check("tomada não vira fader (não tem nível para arrastar)",
+  semNivel.includes('class="cell ctl"') && !semNivel.includes('class="cell ctl arr"'));
+check("tomada ligada mostra 'Ligado', não uma porcentagem inventada",
+  semNivel.includes("Ligado") && !semNivel.includes(">100<"));
+
+console.log("controle: a cor é a cor REAL da luz:");
+check("luz RGB pinta com o próprio rgb_color",
+  coresDe({ sections: [{ entities: { control: "light.sala_colorida" } }],
+    bands: [{ metric: "control" }] })[0] === "rgba(255, 60, 30, 0.85)",
+  coresDe({ sections: [{ entities: { control: "light.sala_colorida" } }], bands: [{ metric: "control" }] })[0]);
+const quente = coresDe({ sections: [{ entities: { control: "light.quente" } }], bands: [{ metric: "control" }] })[0];
+check("luz de 2200 K pinta de âmbar quente (vermelho > azul)",
+  (() => { const n = /rgba\((\d+), (\d+), (\d+)/.exec(quente); return n && +n[1] > +n[3] + 60; })(), quente);
+check("luz apagada tem tom próprio de apagado",
+  coresDe({ sections: [{ entities: { control: "light.apagada" } }], bands: [{ metric: "control" }] })[0]
+    === "rgba(60, 62, 70, 0.85)");
+check("cortina e ventilador não usam o âmbar de tomada",
+  coresDe({ sections: [{ entities: { control: "cover.cortina" } }], bands: [{ metric: "control" }] })[0]
+    !== coresDe({ sections: [{ entities: { control: "switch.tomada" } }], bands: [{ metric: "control" }] })[0]);
+
+console.log("controle: a aritmética do arrasto:");
+const cf = cardCtl({ sections: [{ entities: { control: "light.mesa" } }], bands: [{ metric: "control" }] });
+const cel = celulaFalsa(200, 34);
+check("meio da célula = 50%", cf._fracao(cel, { clientX: 100, clientY: 10 }) === 0.5);
+check("começo = 0%", cf._fracao(cel, { clientX: 0, clientY: 10 }) === 0);
+check("fim = 100%", cf._fracao(cel, { clientX: 200, clientY: 10 }) === 1);
+check("fora da célula não estoura de 0..1",
+  cf._fracao(cel, { clientX: -50, clientY: 10 }) === 0 && cf._fracao(cel, { clientX: 900, clientY: 10 }) === 1);
+const cfR = cardCtl({ sections: [{ entities: { control: "light.mesa" } }],
+  bands: [{ metric: "control" }], direction: "rtl" });
+check("no sentido rtl o arrasto anda para o outro lado",
+  cfR._fracao(cel, { clientX: 50, clientY: 10 }) === 0.75);
+const cfV = cardCtl({ sections: [{ entities: { control: "light.mesa" } }],
+  bands: [{ metric: "control" }], orientation: "vertical" });
+check("no vertical quem manda é o eixo Y",
+  cfV._fracao(celulaFalsa(34, 200), { clientX: 5, clientY: 50 }) === 0.25);
+
+console.log("controle: o serviço e o respiro:");
+const chamadas = [];
+const hassCtl = { ...hass, callService(d, s2, dados) { chamadas.push([d, s2, dados]); } };
+const cs = new reg["mw-rainbow-card"]();
+cs.setConfig({ sections: [{ entities: { control: "light.mesa" } }], bands: [{ metric: "control" }] });
+cs.hass = hassCtl;
+cs._definirNivel("light.mesa", 0.72);
+check("arrastar luz vira brightness_pct",
+  chamadas[0][0] === "light" && chamadas[0][1] === "turn_on" && chamadas[0][2].brightness_pct === 72,
+  JSON.stringify(chamadas[0]));
+cs._definirNivel("light.mesa", 0);
+check("arrastar até o fim desliga em vez de mandar 0 % de brilho",
+  chamadas[1][1] === "turn_off", JSON.stringify(chamadas[1]));
+cs._definirNivel("fan.ventilador", 0.5);
+check("ventilador vira set_percentage", chamadas[2][1] === "set_percentage" && chamadas[2][2].percentage === 50);
+cs._definirNivel("cover.cortina", 0.3);
+check("cortina vira set_cover_position", chamadas[3][1] === "set_cover_position" && chamadas[3][2].position === 30);
+const antes = chamadas.length;
+cs._definirNivel("light.mesa", null);
+check("sem fração não chama serviço nenhum", chamadas.length === antes);
+
+console.log("controle: performance (o requisito do dono):");
+check("o listener é UM só, no shadow root — não um por célula",
+  (() => { const el = new reg["mw-rainbow-card"]();
+    el.setConfig({ sections: [{ device: "dev7" }, { device: "dev8" }, { device: "dev9" }],
+      bands: [{ metric: "control" }, { metric: "temperature" }] });
+    el.hass = hass;
+    const o = el.shadowRoot._ouvintes || {};
+    const total = Object.values(o).reduce((a, b) => a + b.length, 0);
+    // pointerdown, pointerup, pointercancel, dblclick = 4. Nunca por célula.
+    return total === 4; })());
+check("e ele NÃO é rependurado a cada leitura que chega",
+  (() => { const el = new reg["mw-rainbow-card"]();
+    el.setConfig({ sections: [{ device: "dev7" }], bands: [{ metric: "control" }] });
+    el.hass = hass;
+    for (let i = 0; i < 30; i += 1) { el._key = null; el.hass = hass; }
+    const o = el.shadowRoot._ouvintes || {};
+    return Object.values(o).reduce((a, b) => a + b.length, 0) === 4; })());
+check("com o dedo na tela o card NÃO repinta (o eco do HA não briga com o gesto)",
+  (() => { const el = new reg["mw-rainbow-card"]();
+    el.setConfig({ sections: [{ entities: { control: "light.mesa" } }], bands: [{ metric: "control" }] });
+    el.hass = hass;
+    const antes2 = el.shadowRoot.innerHTML;
+    el._grab = true;
+    el.hass = { ...hass, states: { ...hass.states, "light.mesa": S("on", { brightness: 10, supported_color_modes: ["brightness"] }) } };
+    return el.shadowRoot.innerHTML === antes2; })());
+check("passado o respiro, a verdade do HA volta a mandar",
+  (() => { const el = new reg["mw-rainbow-card"]();
+    el.setConfig({ sections: [{ entities: { control: "light.mesa" } }], bands: [{ metric: "control" }] });
+    el.hass = hass;
+    el._settle = Date.now() - 1;   // respiro vencido
+    el.hass = { ...hass, states: { ...hass.states, "light.mesa": S("on", { brightness: 25, supported_color_modes: ["brightness"] }) } };
+    return el.shadowRoot.innerHTML.includes(">10<"); })());
+check("brilho novo repinta mesmo com o state igual a 'on'",
+  (() => { const el = new reg["mw-rainbow-card"]();
+    el.setConfig({ sections: [{ entities: { control: "light.mesa" } }], bands: [{ metric: "control" }] });
+    el.hass = hass;
+    el.hass = { ...hass, states: { ...hass.states, "light.mesa": S("on", { brightness: 255, supported_color_modes: ["brightness"] }) } };
+    return el.shadowRoot.innerHTML.includes(">100<"); })());
+check("touch-action fica SÓ na célula que arrasta (a tela continua rolando)",
+  (() => { const h = mk({ sections: [{ device: "dev7" }],
+    bands: [{ metric: "control" }, { metric: "temperature" }] });
+    return /\.cell\.ctl\.arr\{touch-action:none;\}/.test(h) && !/\.cell\{[^}]*touch-action/.test(h); })());
+check("o véu anda por transform — nunca por width/left (guarda de CI da família)",
+  (() => { const fonte = require("fs").readFileSync(
+    require("path").join(__dirname, "..", "dist", "mw-rainbow-card.js"), "utf8");
+    const bloco = /\.veu\{[^}]*\}/.exec(fonte);
+    return bloco && /transform/.test(bloco[0]) && !/(width|height|left|top):/.test(bloco[0]); })());
+check("célula de leitura não ganha véu nem contexto de empilhamento",
+  !mk({ sections: [{ device: "dev1" }], bands: [{ metric: "temperature" }] }).includes('class="veu"'));
+
+console.log("controle: o bloco canônico de toque:");
+check("touch-feedback v2 está embutido",
+  require("fs").readFileSync(require("path").join(__dirname, "..", "dist", "mw-rainbow-card.js"), "utf8")
+    .includes(">>> touch-feedback v2"));
+
 console.log("filtro da lista de dispositivos do editor:");
 const ed2 = (cfg) => { const e = new reg["mw-rainbow-card-editor"](); e.hass = hass; e.setConfig(cfg); return e; };
 const nomes = (e) => e._dispositivos().map((d) => d.value);
@@ -715,6 +891,7 @@ check("nenhum filtro oferecido resolve para lista vazia num registro completo",
 check("o filtro NÃO muda o que o card desenha (é só do editor)",
   mk({ sections: [{ device: "dev1" }], bands: [{ metric: "temperature" }], device_filter: "todos" })
     === mk({ sections: [{ device: "dev1" }], bands: [{ metric: "temperature" }] }));
+
 
 console.log(fails ? `\n${fails} verificação(ões) falharam` : "\ntudo ok");
 process.exit(fails ? 1 : 0);
