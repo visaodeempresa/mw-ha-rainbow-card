@@ -59,6 +59,13 @@
     paper_color: "none",       // none | paper | <matiz>-<1..7>
     paper_dark: false,         // a mesma chave, lida na rampa de noite
     depth: "soft",             // flat | soft | 3d — substitui shadow/lift
+    // --- editor ---
+    // Filtro da lista de dispositivos do editor. NÃO afeta a tela: é só para
+    // a lista não virar um paredão de 400 dispositivos na hora de montar.
+    // O padrão é `clima` porque é o que o card sempre fez, e porque é o que
+    // deixa a montagem prática: quase toda seção nasce de um sensor de
+    // temperatura/umidade.
+    device_filter: "clima",
     // --- ações ---
     tap_action: "auto",        // auto = cada célula abre o seu sensor
     hold_action: "none",
@@ -870,6 +877,11 @@
   };
   const climateDevices = (hass) => metricDevices(hass, ["temperature", "humidity"]);
 
+  // "Todos" não é todo dispositivo do registro: é todo dispositivo que tem ao
+  // menos uma entidade que este card saberia usar. Listar impressora e roteador
+  // só faria o dono rolar mais.
+  const todosDispositivos = (hass) => metricDevices(hass, METRIC_KEYS);
+
   // Uma entidade serve à grandeza se a classe bate ou se o id termina numa das
   // pistas. Nada de "qualquer sensor do dispositivo": um dispositivo sem LQI
   // acabaria exibindo a temperatura dele como se fosse LQI.
@@ -1309,6 +1321,7 @@
     color_text_light: "Texto claro (fundo escuro)",
     color_name: "Nome do card: texto",
     color_band_label: "Identificação da faixa: texto",
+    device_filter: "Lista de dispositivos do editor",
   };
 
   const COLOR_FIELDS = ["color_unavailable", "color_text_dark", "color_text_light"];
@@ -1323,6 +1336,30 @@
     ["Nível", ["illuminance", "battery"]],
     ["Rádio", ["rssi", "lqi"]],
   ];
+
+  // Filtros da lista de dispositivos do editor. `clima` é o padrão histórico
+  // do card; `card` segue as faixas montadas; os outros são atalhos por
+  // família, para quem está montando um arco-íris de um assunto só.
+  const DEVICE_FILTERS = [
+    { value: "clima", label: "Clima — temperatura e/ou umidade (padrão)",
+      metrics: ["temperature", "humidity"] },
+    { value: "card", label: "As grandezas deste card", metrics: null },
+    { value: "ar", label: "Qualidade do ar", metrics: ["co2", "tvoc", "hcho", "pm25"] },
+    { value: "eletrico", label: "Elétrico — potência, consumo, tensão, corrente",
+      metrics: ["power", "energy", "voltage", "current"] },
+    { value: "nivel", label: "Nível — iluminância e bateria",
+      metrics: ["illuminance", "battery"] },
+    { value: "radio", label: "Rádio — RSSI e LQI", metrics: ["rssi", "lqi"] },
+    { value: "controle", label: "Comandáveis — luz, tomada, ventilador, cortina",
+      metrics: ["control"] },
+    { value: "todos", label: "Todos os dispositivos", metrics: "*" },
+  ];
+  // Filtro cuja grandeza não existe neste build não vira opção: ele
+  // resolveria para lista vazia e pareceria um bug. É assim que o filtro
+  // «comandáveis» aparece sozinho quando a faixa de comando existe, e some
+  // sozinho quando não existe.
+  const deviceFilters = () => DEVICE_FILTERS.filter((f) =>
+    f.metrics === null || f.metrics === "*" || f.metrics.some((m) => METRICS[m]));
 
   // As grandezas que este card realmente usa, na ordem das faixas.
   const usedMetrics = (config) => {
@@ -1559,9 +1596,7 @@
         this.appendChild(this._secEl);
       }
       const hass = this._hass;
-      // A lista de dispositivos segue as grandezas do card: uma tomada com
-      // medição de potência não aparecia aqui quando só clima contava.
-      const devs = hass ? metricDevices(hass, usedMetrics(this._config)) : [];
+      const devs = hass ? this._dispositivos() : [];
       const secs = this._config.sections || [];
       const rows = secs.map((s, i) => {
         const opts = [`<option value="">— escolher dispositivo —</option>`].concat(
@@ -1596,11 +1631,36 @@
       }).join("");
       // o que estava aberto continua aberto depois da reconstrução
       const abertos = Array.from(this._secEl.querySelectorAll("details.adv")).map((d) => d.open);
+      const fAtual = String(this._config.device_filter || DEFAULTS.device_filter);
+      const fOpts = deviceFilters().map((x) =>
+        `<option value="${x.value}"${x.value === fAtual ? " selected" : ""}>${esc(x.label)}</option>`).join("");
+      const fora = devs.filter((d) => d.fora).length;
+      // Com o filtro de clima num card só de potência, a lista fica cheia de
+      // dispositivo que não serve às faixas montadas. Em vez de trocar o
+      // filtro por baixo do dono (mágica que confunde), o editor CONTA quantos
+      // ele está escondendo e diz o que fazer.
+      const doCard = hass ? metricDevices(hass, usedMetrics(this._config)) : [];
+      const jaTem = new Set(devs.map((d) => d.value));
+      const escondidos = doCard.filter((d) => !jaTem.has(d.value)).length;
       this._secEl.innerHTML = `
         <summary>Seções (${secs.length}) — cada seção é um dispositivo</summary>
         <style>${editorCss}</style>
+        <div class="filtro"><label><span>Mostrar dispositivos com</span>
+          <select data-filtro="1">${fOpts}</select></label>
+          <div class="conta">${devs.length} dispositivo${devs.length === 1 ? "" : "s"}${
+            fora ? ` · ${fora} fora do filtro, mantido${fora === 1 ? "" : "s"} por já estar${fora === 1 ? "" : "em"} em uso` : ""
+          }</div>${escondidos ? `<div class="dica">${escondidos} outro${escondidos === 1 ? "" : "s"} serve${escondidos === 1 ? "" : "m"} às faixas deste card — troque para «As grandezas deste card» para ver.</div>` : ""}</div>
         ${rows}
         <button class="add" data-add-sec="1">+ adicionar seção</button>`;
+      const selF = this._secEl.querySelector("select[data-filtro]");
+      if (selF) {
+        selF.addEventListener("change", () => {
+          this._config = { ...this._config, device_filter: selF.value };
+          this._emit();
+          this._sigSec = null;
+          this._paint("sections");
+        });
+      }
       this._secEl.querySelectorAll("details.adv").forEach((d, i) => { d.open = !!abertos[i]; });
       this._secEl.querySelectorAll("select[data-sec], input[data-sec]").forEach((el) => {
         el.addEventListener("change", () =>
@@ -1705,6 +1765,28 @@
       delete data.bands;
       for (const k of Object.keys(data)) if (data[k] === "") delete data[k];
       this._form.data = data;
+    }
+
+    // A lista de dispositivos do editor, já filtrada — com uma rede de
+    // segurança: dispositivo JÁ ESCOLHIDO numa seção entra na lista mesmo que
+    // o filtro o excluísse. Sem isso, trocar o filtro esvaziaria o select de
+    // uma seção montada e o dono perderia a escolha dele sem pedir nada.
+    _dispositivos() {
+      const hass = this._hass;
+      if (!hass) return [];
+      const f = String(this._config.device_filter || DEFAULTS.device_filter);
+      const disponiveis = deviceFilters();
+      const def = disponiveis.find((x) => x.value === f) || disponiveis[0];
+      const metrics = def.metrics === null ? usedMetrics(this._config) : def.metrics;
+      const lista = metrics === "*" ? todosDispositivos(hass) : metricDevices(hass, metrics);
+      const tem = new Set(lista.map((d) => d.value));
+      const faltando = (this._config.sections || [])
+        .map((s) => s.device)
+        .filter((d) => d && !tem.has(d))
+        .map((d) => ({ value: d, label: `${deviceName(hass, d)} — fora do filtro`, fora: true }));
+      return faltando.length
+        ? lista.concat(faltando).sort((a, b) => a.label.localeCompare(b.label, "pt-BR"))
+        : lista;
     }
 
     // A decisão de um campo de faixa, separada do DOM: é ela que o probe
@@ -1839,6 +1921,13 @@
 
   const editorCss = `
     summary{cursor:pointer;font-weight:500;}
+  .filtro{margin:2px 0 10px;}
+  .filtro label{display:flex;align-items:center;gap:8px;font-size:12px;
+    color:var(--secondary-text-color);}
+  .filtro label span{white-space:nowrap;}
+  .filtro select{flex:1;min-width:0;}
+  .filtro .conta{font-size:11px;opacity:.65;margin:3px 0 0 2px;}
+  .filtro .dica{font-size:11px;margin:3px 0 0 2px;color:var(--warning-color,#ffa600);}
   .xtra{display:flex;gap:6px;margin:4px 0 2px 26px;}
   .xtra label{display:flex;align-items:center;gap:6px;flex:1;font-size:12px;
     color:var(--secondary-text-color);}

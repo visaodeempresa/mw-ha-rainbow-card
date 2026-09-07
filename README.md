@@ -248,6 +248,9 @@ recarregar a página com ⌘⇧R.
 | `tap_action` | `auto` | `auto` \| `more-info` \| `navigate` \| `url` \| `none` |
 | `hold_action` / `double_tap_action` | `none` | Idem, sem o `auto` |
 
+> `device_filter` (padrão `clima`) também é opção de card, mas só afeta a
+> lista do editor — veja [O filtro da lista de dispositivos](#o-filtro-da-lista-de-dispositivos).
+
 ### Seção
 
 | Opção | O que faz |
@@ -268,6 +271,34 @@ sections:
 O mapa `entities` existe porque com quatorze grandezas seriam quatorze chaves
 de topo por seção. As cinco chaves antigas continuam funcionando — YAML que já
 está no ar não precisa ser reescrito. Quando as duas existem, o mapa ganha.
+
+### O filtro da lista de dispositivos
+
+A lista do editor não despeja a casa inteira: ela vem filtrada, e o padrão é
+**Clima — temperatura e/ou umidade**, que é o que torna a montagem prática
+(quase toda seção nasce de um sensor de ambiente).
+
+```yaml
+device_filter: clima     # padrão · também: card | ar | eletrico | nivel | radio | controle | todos
+```
+
+| filtro | mostra |
+|---|---|
+| `clima` **(padrão)** | dispositivos com temperatura e/ou umidade |
+| `card` | os que servem às grandezas **deste** card |
+| `ar` · `eletrico` · `nivel` · `radio` · `controle` | atalhos por família |
+| `todos` | todo dispositivo com alguma entidade que o card saiba usar |
+
+Duas garantias que o editor dá:
+
+- **Trocar o filtro nunca apaga a sua escolha.** Dispositivo já usado numa
+  seção continua na lista, marcado *«fora do filtro»* — sem isso, mudar o
+  filtro esvaziaria o select de uma seção montada.
+- **O editor avisa o que está escondendo.** Num card de potência com o filtro
+  de clima, ele conta quantos dispositivos servem às faixas e diz para trocar
+  o filtro — em vez de trocar sozinho por baixo de você.
+
+`device_filter` é **só do editor**: não muda nada do que o card desenha.
 
 **A descoberta é estrita.** Dispositivo sem sensor de uma grandeza não empresta
 outro: a célula fica cinza e honesta. Um purificador que só mede PM2.5 mostra

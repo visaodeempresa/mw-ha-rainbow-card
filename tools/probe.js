@@ -643,5 +643,78 @@ console.log("fundo da tira é sempre uma imagem (regressão da v0.2.0):");
   check(`com ${n} seção(ões) o fundo é um linear-gradient`, bg.startsWith("linear-gradient("), bg);
 });
 
+
+console.log("filtro da lista de dispositivos do editor:");
+const ed2 = (cfg) => { const e = new reg["mw-rainbow-card-editor"](); e.hass = hass; e.setConfig(cfg); return e; };
+const nomes = (e) => e._dispositivos().map((d) => d.value);
+
+const padrao = ed2({ sections: [{ device: "dev1" }], bands: [{ metric: "temperature" }] });
+check("o padrão continua sendo o filtro de clima (o que o card sempre fez)",
+  (padrao._config.device_filter || "clima") === "clima");
+check("e ele lista os dispositivos de temperatura/umidade",
+  ["dev1", "dev2", "dev3"].every((d) => nomes(padrao).includes(d)), nomes(padrao).join(","));
+check("sem trazer a tomada nem o purificador",
+  !nomes(padrao).includes("dev4") && !nomes(padrao).includes("dev6"), nomes(padrao).join(","));
+
+const eletrico = ed2({ sections: [{ device: "dev4" }], bands: [{ metric: "power" }],
+  device_filter: "eletrico" });
+check("filtro elétrico traz a tomada", nomes(eletrico).includes("dev4"));
+check("e não traz os sensores de clima puros",
+  !nomes(eletrico).includes("dev2"), nomes(eletrico).join(","));
+
+const doCard = ed2({ sections: [{ device: "dev4" }], bands: [{ metric: "power" }],
+  device_filter: "card" });
+check("filtro «as grandezas deste card» segue as faixas montadas",
+  nomes(doCard).includes("dev4") && !nomes(doCard).includes("dev2"), nomes(doCard).join(","));
+
+const ar = ed2({ sections: [{ device: "dev5" }], bands: [{ metric: "co2" }], device_filter: "ar" });
+check("filtro de ar acha os 3-em-1 e o purificador",
+  nomes(ar).includes("dev5") && nomes(ar).includes("dev6"), nomes(ar).join(","));
+
+const todos = ed2({ sections: [{ device: "dev1" }], bands: [{ metric: "temperature" }],
+  device_filter: "todos" });
+check("«todos» é mais amplo que o clima", nomes(todos).length > nomes(padrao).length,
+  `${nomes(todos).length} > ${nomes(padrao).length}`);
+
+// a rede de segurança: filtro não pode apagar a escolha já feita
+const preso = ed2({ sections: [{ device: "dev4" }], bands: [{ metric: "temperature" }],
+  device_filter: "clima" });
+check("dispositivo JÁ ESCOLHIDO sobrevive a um filtro que o excluiria",
+  nomes(preso).includes("dev4"), nomes(preso).join(","));
+check("e ele vem marcado como fora do filtro, não disfarçado",
+  preso._dispositivos().find((d) => d.value === "dev4").label.includes("fora do filtro"));
+check("o select da seção continua com o dispositivo escolhido",
+  preso._secEl.innerHTML.includes('value="dev4" selected'));
+
+// o aviso de dispositivo escondido
+const avisa = ed2({ sections: [], bands: [{ metric: "power" }], device_filter: "clima" });
+check("com filtro de clima num card de potência, o editor AVISA que esconde dispositivos",
+  avisa._secEl.innerHTML.includes("servem às faixas deste card")
+  || avisa._secEl.innerHTML.includes("serve às faixas deste card"),
+  avisa._secEl.innerHTML.slice(avisa._secEl.innerHTML.indexOf("conta"), 400));
+const naoAvisa = ed2({ sections: [], bands: [{ metric: "temperature" }], device_filter: "clima" });
+check("e não avisa à toa quando o filtro já cobre as faixas",
+  !naoAvisa._secEl.innerHTML.includes("às faixas deste card"));
+
+const opcoesFiltro = (padrao._secEl.innerHTML.match(/<option value="(clima|card|ar|eletrico|nivel|radio|controle|todos)"/g) || [])
+  .map((x) => /value="([a-z]+)"/.exec(x)[1]);
+check("o seletor de filtro está na tela, com clima, card e todos",
+  ["clima", "card", "todos"].every((x) => opcoesFiltro.includes(x)), opcoesFiltro.join(","));
+// Filtro cuja grandeza não existe neste build não pode virar opção: ele
+// resolveria para lista vazia e pareceria bug. O «comandáveis» só aparece
+// quando a faixa de comando existe — e some sozinho quando não existe.
+const temControle = /^\s*control: \{/m.test(require("fs").readFileSync(
+  require("path").join(__dirname, "..", "dist", "mw-rainbow-card.js"), "utf8"));
+check(`filtro «comandáveis» é oferecido se e só se a grandeza existe (aqui: ${temControle ? "existe" : "não existe"})`,
+  opcoesFiltro.includes("controle") === temControle, opcoesFiltro.join(","));
+check("nenhum filtro oferecido resolve para lista vazia num registro completo",
+  opcoesFiltro.every((f) => {
+    const e = ed2({ sections: [], bands: [{ metric: "temperature" }], device_filter: f });
+    return f === "card" || e._dispositivos().length > 0;
+  }), opcoesFiltro.join(","));
+check("o filtro NÃO muda o que o card desenha (é só do editor)",
+  mk({ sections: [{ device: "dev1" }], bands: [{ metric: "temperature" }], device_filter: "todos" })
+    === mk({ sections: [{ device: "dev1" }], bands: [{ metric: "temperature" }] }));
+
 console.log(fails ? `\n${fails} verificação(ões) falharam` : "\ntudo ok");
 process.exit(fails ? 1 : 0);

@@ -45,6 +45,13 @@ Bancadas (nenhuma abre por `file://` — o navegador recusa o módulo vizinho):
 - **Seção = dispositivo.** As entidades saem por descoberta a partir do
   `device`, e a descoberta é **estrita**: dispositivo sem LQI não empresta a
   temperatura para a faixa de LQI. Existe teste para isso no probe.
+- **`device_filter` é só do editor** (padrão `clima`, que é o que o card
+  sempre fez e o que torna a montagem prática). Duas garantias que não se
+  quebram: dispositivo **já escolhido** numa seção fica na lista mesmo fora do
+  filtro (marcado «fora do filtro»), e o editor **conta e avisa** o que está
+  escondendo em vez de trocar o filtro sozinho. Filtro cuja grandeza não
+  existe no build **não vira opção** — resolveria para lista vazia e pareceria
+  bug (é assim que «comandáveis» aparece só quando a faixa de comando existe).
 - **Cor = escala canônica da casa** (`mw-climate-scale v1`, regra global 40).
   Faixa **seca** por padrão — é assim que os `button-card` pintam, e é o que
   faz o arco-íris bater com o resto da tela. `scale_blend` interpola dentro da
@@ -58,6 +65,8 @@ Bancadas (nenhuma abre por `file://` — o navegador recusa o módulo vizinho):
 
 | Sintoma | Causa | Correção |
 |---|---|---|
+| A **tomada não aparece** na lista de dispositivos do editor | o filtro padrão é `clima` | trocar para «As grandezas deste card» — o editor já avisa quantos está escondendo |
+| Trocar o filtro **esvaziou o select** de uma seção montada | não é para acontecer: há rede de segurança | dispositivo em uso entra na lista marcado «fora do filtro»; se sumiu, o `_dispositivos()` regrediu |
 | O menu do `<select>` do editor **fecha sozinho** enquanto o dono escolhe o dispositivo | o HA empurra um `hass` a cada leitura que chega, e o painel de seções era refeito por `innerHTML` em cima do campo aberto | o editor só repinta quando o **registro** muda (`sameRegistry`) e nunca com campo em foco (`_busy`); pintura pendente sai no `focusout`. Há teste no probe — não mexa nisso sem rodá-lo |
 | Faixa de LQI mostrando a **temperatura** do ambiente | descoberta "qualquer sensor do dispositivo" | a descoberta é por grandeza, e falta de sensor é célula cinza. Teste: "dispositivo sem LQI/bateria/RSSI não empresta a temperatura" |
 | Sensor com 58,995 % piscando **preto** | a escala de umidade do template original fecha a faixa em `n.99` e deixa `(n.99, n+1)` sem dono, caindo no fallback (a cor de 100 %) | o vão está fechado de propósito no `mw-climate-scale v1`; não "simplifique" os limites |
