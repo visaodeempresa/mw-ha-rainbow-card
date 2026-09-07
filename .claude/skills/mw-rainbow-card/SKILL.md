@@ -48,6 +48,11 @@ Bancadas (nenhuma abre por `file://` — o navegador recusa o módulo vizinho):
   escura. É o que responde "ficou bom?" sem subir nada.
 - `tools/bancada.html` — o `<select>` do editor sob enxurrada de `hass`.
 
+⚠️ **O navegador cacheia o `dist` e a bancada mente:** você edita, recarrega e
+continua vendo o código velho. Todas as bancadas carregam o módulo com carimbo
+de tempo desde 07/09 — se uma nova for criada sem ele, este é o sintoma.
+Conferir sempre no destino: `curl -s localhost:8765/dist/... | grep <marcador>`.
+
 ⚠️ **Bancada em aba oculta engana:** o `requestAnimationFrame` congela quando a
 página não desenha, então a pintura otimista do arrasto não acontece e o toque
 longo dispara. Não é bug do card — é a aba. Conferir com a aba visível, ou por
@@ -102,6 +107,16 @@ O que **não** se mexe sem entender:
 - **Cor = escala canônica da casa.** Faixa **seca** por padrão — é assim que os
   `button-card` pintam. `scale_blend` interpola dentro da escala; `blend`
   costura uma seção na vizinha. São coisas diferentes.
+- **Os selects de entidade são preguiçosos.** Seção com o painel fechado não
+  monta select nenhum; eles nascem no `toggle`. Medido na casa real (2.931
+  estados): antes eram 2.469 `<option>` e 317 KB refeitos a cada repintura
+  (28,7 ms); agora são 472 e 37 KB (3,3 ms). O que está aberto mora em
+  `this._abertos` — **na instância, não no DOM**, porque o DOM é refeito por
+  `innerHTML` e ler o estado de lá depois seria ler o que já se perdeu.
+- **O «automático» diz o que achou.** A opção mostra a entidade que a
+  descoberta resolveu, ou «nada neste dispositivo» — e o rótulo da grandeza
+  fica âmbar com «· sem sensor». Antes, a diferença entre uma célula pintada e
+  uma cinza só aparecia depois de salvar.
 - **`device_filter` é só do editor** (padrão `clima`, que é o que o card
   sempre fez e o que torna a montagem prática). Duas garantias que não se
   quebram: dispositivo **já escolhido** numa seção fica na lista mesmo fora do
@@ -145,7 +160,7 @@ O que **não** se mexe sem entender:
 node tools/probe.js
 ```
 
-Esperado: **188** `ok`, a última linha `tudo ok` e o `exit 0`. Qualquer `FAIL` imprime o
+Esperado: **203** `ok`, a última linha `tudo ok` e o `exit 0`. Qualquer `FAIL` imprime o
 começo do HTML gerado — leia o HTML antes de mexer no teste.
 
 E, no destino (regra 30), depois da release:

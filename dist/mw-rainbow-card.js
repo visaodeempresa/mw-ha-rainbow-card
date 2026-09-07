@@ -1142,25 +1142,32 @@
   // Lista para o select do editor: a do dispositivo primeiro; se ele não tem
   // nenhuma daquela grandeza, mostra o que houver para não deixar o campo vazio
   // — mas essa queda é só da interface, nunca da descoberta automática.
-  const sensorsFor = (hass, devId, metric) => {
+  // Devolve { proprias, fora }: as do dispositivo e, só quando ele não tem
+  // nenhuma da grandeza, as do resto da casa — separadas de propósito, para o
+  // editor poder dizer de onde cada opção vem em vez de misturar tudo.
+  const sensorsFor = (hass, devId, metric, opts) => {
     if (METRICS[metric] && METRICS[metric].control) {
-      const proprias = ownControls(hass, devId);
-      const lista = proprias.length ? proprias
-        : Object.keys(hass.states).filter((id) => CONTROL_DOMAINS.includes(id.split(".")[0]));
-      return lista
+      const suas = ownControls(hass, devId);
+      const enfeitar = (l) => l
         .map((id) => ({ value: id, label: `${friendly(hass, id)} (${id})` }))
         .sort((a, b) => a.label.localeCompare(b.label, "pt-BR"));
+      return suas.length
+        ? { proprias: enfeitar(suas), fora: [] }
+        : { proprias: [], fora: enfeitar(Object.keys(hass.states)
+          .filter((id) => CONTROL_DOMAINS.includes(id.split(".")[0]))) };
     }
-    const own = ownSensors(hass, devId);
-    let list = own.filter((id) => servesMetric(hass, id, metric));
-    if (!list.length) {
-      list = Object.keys(hass.states)
-        .filter((id) => id.startsWith("sensor.") && servesMetric(hass, id, metric));
-    }
-    if (!list.length) list = own.length ? own : Object.keys(hass.states).filter((id) => id.startsWith("sensor."));
-    return list
+    const own = (opts && opts.own) || ownSensors(hass, devId);
+    const proprias = own.filter((id) => servesMetric(hass, id, metric));
+    // Fora do dispositivo só quando ele não tem nenhuma — e SÓ da grandeza
+    // pedida. A versão antiga terminava com "senão, todos os sensores da
+    // casa": num BASE-ALFA-01 isso era um <select> com 1.091 opções, que não
+    // ajuda ninguém a escolher nada.
+    const foraDele = proprias.length ? [] : Object.keys(hass.states)
+      .filter((id) => id.startsWith("sensor.") && servesMetric(hass, id, metric));
+    const enfeitar = (l) => l
       .map((id) => ({ value: id, label: `${friendly(hass, id)} (${id})` }))
       .sort((a, b) => a.label.localeCompare(b.label, "pt-BR"));
+    return { proprias: enfeitar(proprias), fora: enfeitar(foraDele) };
   };
 
   // Descoberta automática: estrita. Sem entidade que sirva à grandeza naquele
@@ -2068,6 +2075,10 @@
     /* ---- seções: uma por dispositivo, com as entidades por grandeza ---- */
 
     _paintSections() {
+      // Quais seções estão com o painel de entidades aberto. Mora na
+      // instância (não no DOM) porque o DOM é refeito por innerHTML — ler o
+      // estado de lá depois da reconstrução seria ler o que já se perdeu.
+      this._abertos = this._abertos || new Set();
       const sig = JSON.stringify(this._config.sections || []);
       if (this._secEl && sig === this._sigSec) return; // nada mudou: não mexer
       this._sigSec = sig;
@@ -2084,20 +2095,11 @@
         const opts = [`<option value="">— escolher dispositivo —</option>`].concat(
           devs.map((d) => `<option value="${esc(d.value)}"${d.value === s.device ? " selected" : ""}>${esc(d.label)}</option>`),
         ).join("");
-        // Só as grandezas que este card realmente usa. Antes eram cinco
-        // fixas; com quatorze no registro, desenhar todas seria um paredão de
-        // selects — e quase todos vazios.
-        const usadas = usedMetrics(this._config);
-        const extras = usadas.map((m) => {
-          const key = ENTITY_KEY[m];
-          const cur = (s.entities && s.entities[m]) || (key ? s[key] : "") || "";
-          const list = hass ? sensorsFor(hass, s.device, m) : [];
-          const o = [`<option value="">— automático —</option>`].concat(
-            list.map((e) => `<option value="${esc(e.value)}"${e.value === cur ? " selected" : ""}>${esc(e.label)}</option>`),
-          ).join("");
-          return `<label class="ent"><span>${esc(METRICS[m].label)}</span>
-            <select data-sec="${i}" data-metric="${esc(m)}">${o}</select></label>`;
-        }).join("");
+        // Painel fechado não custa nada: os selects de entidade só nascem
+        // quando o dono abre a seção. Com a casa real (2.931 estados), montar
+        // todos de uma vez dava 2.469 <option> e 317 KB de HTML refeitos a
+        // cada repintura — 28 ms de travada por nada.
+        const extras = this._abertos.has(i) ? this._selectsDeEntidade(s, i) : "";
         return `<div class="row">
           <div class="head">
             <b>${i + 1}</b>
@@ -2111,8 +2113,7 @@
           <details class="adv"><summary>entidades desta seção</summary><div class="ents">${extras}</div></details>
         </div>`;
       }).join("");
-      // o que estava aberto continua aberto depois da reconstrução
-      const abertos = Array.from(this._secEl.querySelectorAll("details.adv")).map((d) => d.open);
+
       const fAtual = String(this._config.device_filter || DEFAULTS.device_filter);
       const fOpts = deviceFilters().map((x) =>
         `<option value="${x.value}"${x.value === fAtual ? " selected" : ""}>${esc(x.label)}</option>`).join("");
@@ -2143,7 +2144,24 @@
           this._paint("sections");
         });
       }
-      this._secEl.querySelectorAll("details.adv").forEach((d, i) => { d.open = !!abertos[i]; });
+      // O que estava aberto continua aberto — e quem abre depois recebe os
+      // selects na hora, montados só para aquela seção.
+      this._secEl.querySelectorAll("details.adv").forEach((d, i) => {
+        d.open = this._abertos.has(i);
+        d.addEventListener("toggle", () => {
+          if (d.open) {
+            this._abertos.add(i);
+            const caixa = d.querySelector(".ents");
+            if (caixa && !caixa.innerHTML.trim()) {
+              caixa.innerHTML = this._selectsDeEntidade((this._config.sections || [])[i] || {}, i);
+              caixa.querySelectorAll("select[data-sec]").forEach((el) => {
+                el.addEventListener("change", () =>
+                  this._secFieldChanged(Number(el.dataset.sec), el.dataset.field, el.dataset.metric, el.value));
+              });
+            }
+          } else this._abertos.delete(i);
+        });
+      });
       this._secEl.querySelectorAll("select[data-sec], input[data-sec]").forEach((el) => {
         el.addEventListener("change", () =>
           this._secFieldChanged(Number(el.dataset.sec), el.dataset.field, el.dataset.metric, el.value));
@@ -2247,6 +2265,40 @@
       delete data.bands;
       for (const k of Object.keys(data)) if (data[k] === "") delete data[k];
       this._form.data = data;
+    }
+
+    // Os selects de entidade de UMA seção. Chamado na pintura só para as
+    // seções abertas, e no `toggle` para a que o dono acabou de abrir.
+    _selectsDeEntidade(s, i) {
+      const hass = this._hass;
+      if (!hass) return "";
+      // `ownSensors` varre o registro inteiro; sem esta memória ele seria
+      // refeito uma vez por grandeza, para o mesmo dispositivo.
+      const own = ownSensors(hass, s.device);
+      return usedMetrics(this._config).map((m) => {
+        const key = ENTITY_KEY[m];
+        const cur = (s.entities && s.entities[m]) || (key ? s[key] : "") || "";
+        const { proprias, fora } = sensorsFor(hass, s.device, m, { own });
+        // O que a descoberta automática ESCOLHEU, escrito na própria opção.
+        // Sem isso o dono vê "— automático —" e não sabe se achou alguma
+        // coisa: a diferença entre uma célula pintada e uma cinza fica
+        // invisível até ele olhar a tela.
+        const achado = autoEntity(hass, s.device, m);
+        const rotAuto = achado
+          ? `— automático: ${friendly(hass, achado)} —`
+          : "— automático: nada neste dispositivo —";
+        const opt = (e) => `<option value="${esc(e.value)}"${e.value === cur ? " selected" : ""}>${esc(e.label)}</option>`;
+        const grupo = (rot, lista) => (lista.length
+          ? `<optgroup label="${esc(rot)}">${lista.map(opt).join("")}</optgroup>` : "");
+        const corpo = grupo("Deste dispositivo", proprias)
+          + grupo("Fora deste dispositivo", fora);
+        const vazio = !proprias.length && !fora.length
+          ? `<option value="" disabled>nenhum sensor de ${esc(METRICS[m].label.toLowerCase())} na casa</option>` : "";
+        return `<label class="ent${achado || cur ? "" : " sem"}"><span>${esc(METRICS[m].label)}</span>
+          <select data-sec="${i}" data-metric="${esc(m)}">
+            <option value=""${cur ? "" : " selected"}>${esc(rotAuto)}</option>${corpo}${vazio}
+          </select></label>`;
+      }).join("");
     }
 
     // A lista de dispositivos do editor, já filtrada — com uma rede de
@@ -2412,6 +2464,10 @@
   .filtro select{flex:1;min-width:0;}
   .filtro .conta{font-size:11px;opacity:.65;margin:3px 0 0 2px;}
   .filtro .dica{font-size:11px;margin:3px 0 0 2px;color:var(--warning-color,#ffa600);}
+  /* Grandeza sem nenhum sensor naquele dispositivo: o rótulo avisa, em vez
+     de deixar o dono descobrir pela célula cinza na tela. */
+  .ent.sem > span{color:var(--warning-color,#ffa600);}
+  .ent.sem > span::after{content:" · sem sensor";font-size:10px;opacity:.8;}
   .xtra{display:flex;gap:6px;margin:4px 0 2px 26px;}
   .xtra label{display:flex;align-items:center;gap:6px;flex:1;font-size:12px;
     color:var(--secondary-text-color);}
@@ -2426,13 +2482,26 @@
     .head input[type=number]{width:74px;}
     select,input{background:var(--card-background-color);color:var(--primary-text-color);
       border:1px solid var(--divider-color);border-radius:6px;padding:4px 6px;font-size:13px;}
+    /* Placeholder do tema é claro demais sobre o cartão: no papel creme e no
+       grafite ele sumia, e "nome (opcional)" parecia campo desabilitado. */
+    input::placeholder{color:var(--secondary-text-color);opacity:.7;}
     button{background:none;border:1px solid var(--divider-color);border-radius:6px;
-      color:var(--primary-text-color);cursor:pointer;padding:3px 7px;font-size:12px;}
+      color:var(--primary-text-color);cursor:pointer;padding:3px 7px;font-size:12px;
+      line-height:1;transition:background-color .12s,border-color .12s,color .12s;}
+    button:hover{background:var(--divider-color);}
+    /* Remover é destrutivo e não pode parecer irmão de subir/descer: só a cor
+       muda, e só ao passar o ponteiro — para não virar um card cheio de
+       vermelho parado. */
+    button[data-del]:hover,button[data-bdel]:hover{
+      background:var(--error-color,#db4437);border-color:var(--error-color,#db4437);color:#fff;}
+    button:focus-visible{outline:2px solid var(--primary-color,#03a9f4);outline-offset:1px;}
     button.add{margin-top:8px;width:100%;padding:6px;}
     .adv{margin:4px 0 0 20px;}
     .adv summary{font-size:12px;opacity:.7;font-weight:400;}
     .ents{display:grid;grid-template-columns:1fr;gap:4px;padding:4px 0;}
-    .ent{display:grid;grid-template-columns:110px 1fr;gap:6px;align-items:center;font-size:12px;}
+    /* 132px porque o rótulo pode ganhar o aviso "· sem sensor"; com 110 ele
+       quebrava em duas linhas e desalinhava a fileira inteira. */
+    .ent{display:grid;grid-template-columns:132px 1fr;gap:6px;align-items:center;font-size:12px;}
     .ent select{min-width:0;}
     .crow{display:grid;grid-template-columns:1fr 44px 110px minmax(110px,1fr);gap:10px;
       align-items:center;padding:6px 0;}

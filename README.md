@@ -416,7 +416,7 @@ Arquivo único, sem build: `dist/mw-rainbow-card.js` é fonte **e** artefato.
 
 ```bash
 node --check dist/mw-rainbow-card.js
-node tools/probe.js          # 188 verificações, card e editor, sem navegador
+node tools/probe.js          # 203 verificações, card e editor, sem navegador
 node tools/gerar-imagens.js  # regera as imagens do README a partir do card
 ```
 

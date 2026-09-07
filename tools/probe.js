@@ -615,10 +615,27 @@ check("faixa de temperatura NÃO ganha campo extra nenhum",
     return !e._bandEl.innerHTML.includes('class="xtra"'); })());
 
 const secHtml = edN._secEl ? edN._secEl.innerHTML : "";
-check("a seção mostra só as grandezas em uso, não as quatorze",
-  (secHtml.match(/class="ent"/g) || []).length === 4, String((secHtml.match(/class="ent"/g) || []).length));
+check("painel de entidades FECHADO não monta select nenhum (custo zero)",
+  !/<label class="ent/.test(secHtml) && !/data-metric=/.test(secHtml),
+  String((secHtml.match(/<label class="ent/g) || []).length));
 check("e a tomada aparece na lista de dispositivos de uma faixa elétrica",
   secHtml.includes("Tomada da sala"));
+const abertoHtml = edN._selectsDeEntidade({ device: "dev4" }, 0);
+check("aberto, a seção mostra só as grandezas em uso — não as quinze",
+  (abertoHtml.match(/<label class="ent/g) || []).length === 4,
+  String((abertoHtml.match(/<label class="ent/g) || []).length));
+check("e o «automático» diz o que a descoberta ACHOU, não só «automático»",
+  abertoHtml.includes("— automático: Tomada Da Sala Tensao —")
+  || /— automático: [^—]+ —/.test(abertoHtml),
+  (/— automático:[^<]*/.exec(abertoHtml) || [""])[0]);
+check("e diz quando não achou nada naquele dispositivo",
+  edN._selectsDeEntidade({ device: "dev3" }, 0).includes("nada neste dispositivo"));
+check("as opções vêm separadas por origem (deste dispositivo × fora dele)",
+  abertoHtml.includes('<optgroup label="Deste dispositivo"'));
+check("dispositivo sem a grandeza oferece as de fora, marcadas como de fora",
+  edN._selectsDeEntidade({ device: "dev3" }, 0).includes('<optgroup label="Fora deste dispositivo"'));
+check("e a casa NÃO é despejada no select (nada de «todos os sensores»)",
+  !/<option value="sensor\.sala_lqi"/.test(edN._selectsDeEntidade({ device: "dev3" }, 0)));
 
 // escolher a entidade grava no mapa novo, não numa chave de topo.
 // O dublê de DOM não devolve elementos, então o teste chama a decisão —
@@ -657,9 +674,9 @@ edT._bandFieldChanged(0, "metric", "voltage");
 check("trocar corrente por tensão apaga o `max` que era do circuito",
   !!saiuT.length && saiuT[0].bands[0].metric === "voltage" && saiuT[0].bands[0].max === undefined,
   JSON.stringify(saiuT[0] && saiuT[0].bands[0]));
+const listaT = edT._selectsDeEntidade({ device: "dev4" }, 0);
 check("e a lista de entidades da seção já mostra a grandeza nova",
-  edT._secEl.innerHTML.includes("Tensão") && !edT._secEl.innerHTML.includes("Corrente"),
-  edT._secEl.innerHTML.slice(0, 160));
+  listaT.includes("Tensão") && !listaT.includes("Corrente"), listaT.slice(0, 160));
 
 console.log("fundo da tira é sempre uma imagem (regressão da v0.2.0):");
 [1, 2, 3].forEach((n) => {
@@ -893,5 +910,41 @@ check("o filtro NÃO muda o que o card desenha (é só do editor)",
     === mk({ sections: [{ device: "dev1" }], bands: [{ metric: "temperature" }] }));
 
 
+
+console.log("editor — estabilidade e legibilidade:");
+const cssEd = edN._secEl.innerHTML;
+check("placeholder tem contraste próprio (o do tema sumia no papel)",
+  cssEd.includes("input::placeholder"));
+check("remover não parece irmão de subir/descer",
+  cssEd.includes("button[data-del]:hover"));
+check("há foco visível para quem navega por teclado",
+  cssEd.includes("button:focus-visible"));
+check("grandeza sem sensor no dispositivo é marcada no rótulo",
+  edN._selectsDeEntidade({ device: "dev3" }, 0).includes('class="ent sem"'));
+const linhas4 = edN._selectsDeEntidade({ device: "dev4" }, 0).split('<label class="ent').slice(1);
+check("a tomada tem tensão: essa linha NÃO é marcada",
+  linhas4[0].startsWith('"') && linhas4[0].includes("Tensão"), linhas4[0].slice(0, 60));
+check("e a bateria, que ela não tem, é marcada",
+  linhas4[3].startsWith(" sem") && linhas4[3].includes("Bateria"), linhas4[3].slice(0, 60));
+
+// estabilidade: o painel aberto continua aberto depois de uma repintura
+const edA = new reg["mw-rainbow-card-editor"]();
+edA.hass = hass;
+edA.setConfig({ sections: [{ device: "dev1" }, { device: "dev2" }], bands: [{ metric: "temperature" }] });
+edA._abertos.add(1);
+edA._sigSec = null;
+edA._paintSections();
+check("seção aberta continua aberta depois de repintar (o estado é da instância)",
+  edA._abertos.has(1) && edA._secEl.innerHTML.includes("data-metric"));
+check("e a fechada continua sem custo nenhum",
+  (edA._secEl.innerHTML.match(/<label class="ent/g) || []).length === 1,
+  String((edA._secEl.innerHTML.match(/<label class="ent/g) || []).length));
+
+// estabilidade: remover uma seção não pode deixar painel aberto órfão
+edA._abertos.add(0);
+const saiuA = [];
+edA.dispatchEvent = (ev) => saiuA.push(ev.detail.config);
+check("o índice de aberto nunca aponta para seção que não existe",
+  Array.from(edA._abertos).every((i) => i < (edA._config.sections || []).length));
 console.log(fails ? `\n${fails} verificação(ões) falharam` : "\ntudo ok");
 process.exit(fails ? 1 : 0);
