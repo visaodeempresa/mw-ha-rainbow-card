@@ -42,7 +42,14 @@ global.window = {};
 global.CustomEvent = class { constructor(t, d) { this.type = t; Object.assign(this, d); } };
 console.info = () => {};
 
-eval(fs.readFileSync(path.join(__dirname, "..", "dist", "mw-rainbow-card.js"), "utf8"));
+// Por padrão prova o dist do repositório. Com MW_CARD apontando para outro
+// arquivo, prova QUALQUER cópia — inclusive a que o servidor está entregando:
+//   curl -s "$HA_URL/hacsfiles/mw-ha-rainbow-card/mw-rainbow-card.js" -o /tmp/x.js
+//   MW_CARD=/tmp/x.js node tools/probe.js
+// É a diferença entre "o meu arquivo passa" e "o que chega na casa passa"
+// (regra global 30).
+const SRC = process.env.MW_CARD || path.join(__dirname, "..", "dist", "mw-rainbow-card.js");
+eval(fs.readFileSync(SRC, "utf8"));
 
 const S = (state, attrs) => ({ state: String(state), attributes: attrs });
 const hass = {
@@ -826,7 +833,7 @@ check("touch-action fica SÓ na célula que arrasta (a tela continua rolando)",
     return /\.cell\.ctl\.arr\{touch-action:none;\}/.test(h) && !/\.cell\{[^}]*touch-action/.test(h); })());
 check("o véu anda por transform — nunca por width/left (guarda de CI da família)",
   (() => { const fonte = require("fs").readFileSync(
-    require("path").join(__dirname, "..", "dist", "mw-rainbow-card.js"), "utf8");
+    SRC, "utf8");
     const bloco = /\.veu\{[^}]*\}/.exec(fonte);
     return bloco && /transform/.test(bloco[0]) && !/(width|height|left|top):/.test(bloco[0]); })());
 check("célula de leitura não ganha véu nem contexto de empilhamento",
@@ -834,7 +841,7 @@ check("célula de leitura não ganha véu nem contexto de empilhamento",
 
 console.log("controle: o bloco canônico de toque:");
 check("touch-feedback v2 está embutido",
-  require("fs").readFileSync(require("path").join(__dirname, "..", "dist", "mw-rainbow-card.js"), "utf8")
+  require("fs").readFileSync(SRC, "utf8")
     .includes(">>> touch-feedback v2"));
 
 console.log("filtro da lista de dispositivos do editor:");

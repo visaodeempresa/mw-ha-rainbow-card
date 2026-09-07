@@ -163,6 +163,15 @@ node tools/probe.js
 Esperado: **203** `ok`, a última linha `tudo ok` e o `exit 0`. Qualquer `FAIL` imprime o
 começo do HTML gerado — leia o HTML antes de mexer no teste.
 
+O probe também prova **o que a casa recebeu**, não só o que está no repositório:
+
+```bash
+curl -s "$HA_URL/hacsfiles/mw-ha-rainbow-card/mw-rainbow-card.js" -o /tmp/x.js
+MW_CARD=/tmp/x.js node tools/probe.js
+```
+
+É a diferença entre «o meu arquivo passa» e «o que chega na casa passa».
+
 E, no destino (regra 30), depois da release:
 
 ```bash
