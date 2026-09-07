@@ -1,0 +1,82 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>bancada mw-rainbow-card — o editor</title>
+<style>
+  body{font:14px system-ui;margin:0;padding:20px;background:#101012;color:#eee}
+  body.claro{background:#e9e7e2;color:#1a1a1a}
+  h3{margin:22px 0 8px;font-size:13px;letter-spacing:.08em;text-transform:uppercase;opacity:.65}
+  .caixa{max-width:520px;background:#0006;border:1px solid #8883;border-radius:12px;padding:14px;margin-bottom:20px}
+  body.claro .caixa{background:#fff9}
+  button{font:inherit;padding:6px 12px;border-radius:8px;border:1px solid #8886;background:#8882;color:inherit;cursor:pointer}
+  select,input{font:inherit;padding:3px 6px;border-radius:6px;border:1px solid #8886;background:#8881;color:inherit}
+  details{border:1px solid #8883;border-radius:10px;padding:8px 10px;margin-bottom:10px}
+  summary{cursor:pointer;font-weight:500}
+</style>
+<button onclick="document.body.classList.toggle('claro')">alternar tema da página</button>
+<div id="host"></div>
+<!-- O navegador cacheia o módulo vizinho e a bancada passa a mentir: você
+     edita o dist, recarrega, e continua vendo o código velho. O carimbo de
+     tempo mata isso. document.write é síncrono durante o parse, então o
+     bloco abaixo já encontra os custom elements definidos. -->
+<script>document.write('<scr' + 'ipt src="../dist/mw-rainbow-card.js?t=' + Date.now() + '"></scr' + 'ipt>');</script>
+<script>
+/* Bancada do EDITOR. O filtro da lista de dispositivos é o que se confere
+ * aqui: a lista curta de sempre (clima) continua sendo o padrão, e trocar o
+ * filtro não pode apagar dispositivo que já está em uso numa seção.
+ *
+ * python3 -m http.server 8765 → http://localhost:8765/tools/bancada-editor.html
+ */
+const S = (state, attrs) => ({ state: String(state), attributes: attrs || {} });
+const states = {}, entities = {}, devices = {};
+const por = (dev, nome, sensores) => {
+  devices[dev] = { name: nome };
+  Object.entries(sensores).forEach(([id, st]) => { states[id] = st; entities[id] = { device_id: dev }; });
+};
+// clima
+["Sala", "Quarto", "Cozinha", "Suíte", "Escritório"].forEach((n, i) => por(`clima${i}`, `Sensor ${n}`, {
+  [`sensor.${i}_temperatura`]: S(23 + i, { device_class: "temperature", unit_of_measurement: "°C" }),
+  [`sensor.${i}_umidade`]: S(50 + i, { device_class: "humidity", unit_of_measurement: "%" }),
+}));
+// elétrico
+["da TV", "da geladeira", "do micro-ondas"].forEach((n, i) => por(`tomada${i}`, `Tomada ${n}`, {
+  [`sensor.tom${i}_potencia`]: S(40 * i, { device_class: "power", unit_of_measurement: "W" }),
+  [`sensor.tom${i}_tensao`]: S(223, { device_class: "voltage", unit_of_measurement: "V" }),
+  [`sensor.tom${i}_consumo`]: S(12 * i, { device_class: "energy", unit_of_measurement: "kWh" }),
+}));
+// ar
+["da cozinha", "da suíte"].forEach((n, i) => por(`ar${i}`, `Qualidade do ar ${n}`, {
+  [`sensor.qualidade_do_ar_${i}_dioxido_de_carbono`]: S(400 + i * 300, { device_class: "carbon_dioxide", unit_of_measurement: "ppm" }),
+  [`sensor.qualidade_do_ar_${i}_vocs`]: S(0.1, { unit_of_measurement: "ppm" }),
+}));
+// comandáveis
+por("luz0", "Luz da mesa", { "light.mesa": S("on", { brightness: 128, supported_color_modes: ["brightness"] }) });
+por("luz1", "Luz da sala", { "light.sala": S("on", { brightness: 200, rgb_color: [255, 80, 40], supported_color_modes: ["rgb"] }) });
+
+const hass = { states, entities, devices, areas: {}, locale: { language: "pt-BR" }, callService() {} };
+const host = document.getElementById("host");
+
+const caso = (titulo, cfg) => {
+  const h = document.createElement("h3"); h.textContent = titulo;
+  const box = document.createElement("div"); box.className = "caixa";
+  const ed = document.createElement("mw-rainbow-card-editor");
+  box.appendChild(ed);
+  host.append(h, box);
+  ed.hass = hass;
+  ed.setConfig(cfg);
+  ed.addEventListener("config-changed", (ev) => {
+    console.log("config-changed", JSON.stringify(ev.detail.config));
+  });
+};
+
+caso("Padrão — filtro de clima, a lista curta de sempre",
+  { sections: [{ device: "clima0" }, { device: "clima1" }], bands: [{ metric: "temperature" }, { metric: "humidity" }] });
+caso("Card só de potência com o filtro de clima — o editor avisa que esconde",
+  { sections: [], bands: [{ metric: "power" }, { metric: "voltage" }] });
+caso("Rede de segurança — a tomada já escolhida sobrevive ao filtro de clima",
+  { sections: [{ device: "tomada0" }], bands: [{ metric: "power" }], device_filter: "clima" });
+// Este só mostra o filtro «comandáveis» quando a faixa de comando existe no
+// build. Sem ela, o editor cai no filtro padrão sem quebrar — e a luz já
+// escolhida sobrevive como "fora do filtro". As duas coisas são de propósito.
+caso("Filtro «comandáveis» — só o que se pode ligar (some se a faixa de comando não existir)",
+  { sections: [{ device: "luz0" }], bands: [{ metric: "control" }], device_filter: "controle" });
+</script>

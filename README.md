@@ -16,8 +16,10 @@ casa — a mesma dos `button-card`, do
 [MW Temperature / Humidity Card](https://github.com/visaodeempresa/mw-ha-temp-humidity-card)
 e do [MW State Color Element](https://github.com/visaodeempresa/mw-ha-state-color-element).
 
-**Quatorze grandezas:** temperatura, umidade, CO₂, TVOC, formaldeído, PM2.5,
-potência, consumo, tensão, corrente, iluminância, bateria, RSSI e LQI.
+**Quatorze grandezas** — temperatura, umidade, CO₂, TVOC, formaldeído, PM2.5,
+potência, consumo, tensão, corrente, iluminância, bateria, RSSI e LQI — **e uma
+faixa que comanda**: luz, tomada, ventilador e cortina, com toque para
+ligar e arrasto para ajustar o nível.
 
 ![A casa inteira numa tira só](https://mayconsoftware.github.io/mw-ha-rainbow-card/docs/img/arco-iris-completo.svg)
 
@@ -81,6 +83,7 @@ os gauges na mesma tela.
 | Consumo | `energy` | relativa ao card | idem |
 | Tensão | `voltage` | **PRODIST módulo 8** | idem |
 | Corrente | `current` | relativa ao circuito | idem |
+| **Comando** | `control` | — | o estado da própria entidade |
 | Iluminância | `illuminance` | 7 degraus, lx | escala de nível |
 | Bateria | `battery` | duas réguas (ver abaixo) | idem |
 | RSSI | `rssi` | −90 … −50 dBm | rampa local do card |
@@ -179,6 +182,77 @@ mesmo `device_class` convivem `V`/`mV`, `A`/`mA`, `Wh`/`kWh` — e sem converter
 a cor sai errada por três ordens de grandeza.
 
 
+## A faixa que comanda
+
+O arco-íris deixou de ser só leitura. Uma faixa `control` põe **luz, tomada,
+ventilador, cortina e input_boolean** na mesma tira das grandezas — e a célula
+vira o próprio cursor.
+
+![A faixa que comanda](https://mayconsoftware.github.io/mw-ha-rainbow-card/docs/img/arco-iris-controle.svg)
+
+```yaml
+type: custom:mw-rainbow-card
+sections:
+  - entities: {control: light.mesa}
+  - entities: {control: light.sala}
+  - entities: {control: light.suite}
+bands:
+  - metric: control
+  - metric: temperature      # comando e leitura na mesma tira
+```
+
+| Gesto | O que faz |
+|---|---|
+| **Toque** | Liga / desliga |
+| **Arrastar** ao longo da célula | Ajusta brilho, velocidade ou posição |
+| **Segurar** parado | Abre o `more-info` |
+
+- **A cor é a cor real da luz.** `rgb_color` quando ela informa um; senão a
+  temperatura de cor convertida em RGB. Com `blend: true`, uma fileira de
+  luzes vira uma fita com as cores que a casa está fazendo agora.
+- **A célula é o nível.** A parte não acesa fica sob um véu; o aceso mostra a
+  cor. De longe, o arco-íris lê como um equalizador da casa.
+- **Quem não tem nível não arrasta.** Tomada e `input_boolean` só respondem ao
+  toque — arrastar neles seria mentira. E, por não arrastarem, eles **não**
+  recebem `touch-action`: a tela continua rolando por cima deles no celular.
+
+### Confirmação, para o que não se liga por engano
+
+```yaml
+bands:
+  - metric: control
+    confirm: true
+    # ou o texto: confirm: "Vai mesmo {acao} o {nome}?"
+```
+
+Usa o balão de papel padrão da casa (bloco canônico `touch-feedback v2`), que
+acompanha o `depth` e o `paper_color` do card.
+
+### Por que isto não deixou o card pesado
+
+O comando **pagou dívida em vez de criar**:
+
+| | antes | agora |
+|---|---|---|
+| listeners | um `click` **por célula**, refeitos a cada leitura | **quatro no total**, no shadow root, pendurados uma vez |
+| durante o arrasto | — | **zero** re-render e **zero** chamada de serviço |
+| ao soltar | — | **uma** chamada |
+
+- O nível se move por `transform`, nunca por `width`/`left` — não força
+  layout, e respeita o guarda de CI da família (animação só em `transform` e
+  `opacity`).
+- O `pointermove` **só existe durante o gesto**, capturado no elemento: fora
+  dele não há handler escutando o ponteiro.
+- A pintura é coalescida em `requestAnimationFrame` — no máximo uma por quadro.
+- Com o dedo na tela o card **não repinta**: o eco do Home Assistant não briga
+  com o gesto (é o que faz o cursor "voltar sozinho" em sliders mal feitos).
+  Passados 700 ms do soltar, a verdade do HA volta a mandar.
+- A chave de estado ganha **um** atributo por célula de controle (o nível) —
+  precisa dele porque mudar o brilho de uma luz não muda o `state` dela, que
+  continua `on`.
+- Célula de leitura não ganha véu, nem `position`, nem `touch-action`.
+
+
 ## Papel e relevo
 
 ```yaml
@@ -248,6 +322,9 @@ recarregar a página com ⌘⇧R.
 | `tap_action` | `auto` | `auto` \| `more-info` \| `navigate` \| `url` \| `none` |
 | `hold_action` / `double_tap_action` | `none` | Idem, sem o `auto` |
 
+> `device_filter` (padrão `clima`) também é opção de card, mas só afeta a
+> lista do editor — veja [O filtro da lista de dispositivos](#o-filtro-da-lista-de-dispositivos).
+
 ### Seção
 
 | Opção | O que faz |
@@ -269,6 +346,34 @@ O mapa `entities` existe porque com quatorze grandezas seriam quatorze chaves
 de topo por seção. As cinco chaves antigas continuam funcionando — YAML que já
 está no ar não precisa ser reescrito. Quando as duas existem, o mapa ganha.
 
+### O filtro da lista de dispositivos
+
+A lista do editor não despeja a casa inteira: ela vem filtrada, e o padrão é
+**Clima — temperatura e/ou umidade**, que é o que torna a montagem prática
+(quase toda seção nasce de um sensor de ambiente).
+
+```yaml
+device_filter: clima     # padrão · também: card | ar | eletrico | nivel | radio | controle | todos
+```
+
+| filtro | mostra |
+|---|---|
+| `clima` **(padrão)** | dispositivos com temperatura e/ou umidade |
+| `card` | os que servem às grandezas **deste** card |
+| `ar` · `eletrico` · `nivel` · `radio` · `controle` | atalhos por família |
+| `todos` | todo dispositivo com alguma entidade que o card saiba usar |
+
+Duas garantias que o editor dá:
+
+- **Trocar o filtro nunca apaga a sua escolha.** Dispositivo já usado numa
+  seção continua na lista, marcado *«fora do filtro»* — sem isso, mudar o
+  filtro esvaziaria o select de uma seção montada.
+- **O editor avisa o que está escondendo.** Num card de potência com o filtro
+  de clima, ele conta quantos dispositivos servem às faixas e diz para trocar
+  o filtro — em vez de trocar sozinho por baixo de você.
+
+`device_filter` é **só do editor**: não muda nada do que o card desenha.
+
 **A descoberta é estrita.** Dispositivo sem sensor de uma grandeza não empresta
 outro: a célula fica cinza e honesta. Um purificador que só mede PM2.5 mostra
 célula cinza nas faixas de CO₂ e de VOC — nunca a leitura do vizinho.
@@ -279,7 +384,7 @@ Atalho: `sections: [dev1, dev2]` equivale a `[{device: dev1}, {device: dev2}]`.
 
 | Opção | O que faz |
 |---|---|
-| `metric` | A grandeza — veja a tabela das quatorze acima |
+| `metric` | A grandeza — veja a tabela das quatorze acima, ou `control` |
 | `height` | Altura só desta faixa |
 | `label` / `icon` | Sobrescreve o rótulo e o ícone da grandeza |
 | `show_values` | Sobrescreve o global, só nesta faixa |
@@ -287,6 +392,7 @@ Atalho: `sections: [dev1, dev2]` equivale a `[{device: dev1}, {device: dev2}]`.
 | `nominal` | **Só em `voltage`** — `220`, `127`, `cell`, ou omitido = automático |
 | `max` | **Só em `current`** (limite do circuito, A) e **`energy`** (teto da régua, kWh) |
 | `scale` | **Só em `battery`** — `fina` (padrão) ou `canonica` |
+| `confirm` | **Só em `control`** — `true`, ou o texto do balão (`{nome}`, `{acao}`) |
 
 O editor visual mostra o campo extra só na grandeza que o usa, e trocar a
 grandeza de uma faixa apaga o parâmetro que era da anterior — um `max` de
@@ -310,7 +416,7 @@ Arquivo único, sem build: `dist/mw-rainbow-card.js` é fonte **e** artefato.
 
 ```bash
 node --check dist/mw-rainbow-card.js
-node tools/probe.js          # 139 verificações, card e editor, sem navegador
+node tools/probe.js          # 203 verificações, card e editor, sem navegador
 node tools/gerar-imagens.js  # regera as imagens do README a partir do card
 ```
 
@@ -327,6 +433,14 @@ Bancada visual (não abre por `file://` — o navegador recusa o módulo vizinho
 python3 -m http.server 8765
 ```
 
+- `tools/bancada-editor.html` — **o editor**, com o filtro da lista de
+  dispositivos nos quatro casos que importam: o padrão, o card de potência com
+  o filtro de clima (que avisa o que esconde), a rede de segurança do
+  dispositivo já escolhido, e o filtro de comandáveis
+- `tools/bancada-controle.html` — **o fader, dirigível com o mouse**: as
+  chamadas de serviço são escritas na tela em vez de enviadas, e o estado local
+  responde como a casa responderia (com atraso de propósito, para exercitar o
+  respiro de 700 ms). Prova o gesto sem acender lâmpada nenhuma às três da manhã
 - `tools/bancada-escalas.html` — **todas as escalas, degrau a degrau**, mais os
   quatro erros que elas existem para não cometer (pilha em mV, unidades
   misturadas, descoberta estrita, semáforo do ar), claro e escuro
@@ -338,10 +452,10 @@ card headless, lê o `linear-gradient` que ele mesmo produziu e escreve o SVG.
 Mexeu numa escala, rode o script e o README já conta a verdade nova — print
 envelhece calado.
 
-Seis blocos canônicos são embutidos byte a byte entre marcadores:
+Sete blocos canônicos são embutidos byte a byte entre marcadores:
 `paper-palette`, `paper-dark-palette`, `mw-climate-scale` (regra 40),
-`mw-air-quality-scale` (regra 90), `mw-level-scale` e `mw-electrical-scale`
-(regra 180). Antes de commitar o `dist`: `IA/tools/check-embeds.sh`.
+`mw-air-quality-scale` (regra 90), `mw-level-scale`, `mw-electrical-scale`
+(regra 180) e `touch-feedback v2` (a vibração e o balão de confirmação). Antes de commitar o `dist`: `IA/tools/check-embeds.sh`.
 As escalas se editam **na fonte canônica**, nunca na cópia local.
 
 Fluxo `feature → develop → release → main`; o merge na `main` dispara o bump

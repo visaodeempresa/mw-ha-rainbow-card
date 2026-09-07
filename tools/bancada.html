@@ -5,7 +5,11 @@
 <h3>Bancada — o &lt;select&gt; sobrevive à enxurrada de hass?</h3>
 <div id="host"></div>
 <div id="log"></div>
-<script src="../dist/mw-rainbow-card.js"></script>
+<!-- O navegador cacheia o módulo vizinho e a bancada passa a mentir: você
+     edita o dist, recarrega, e continua vendo o código velho. O carimbo de
+     tempo mata isso. document.write é síncrono durante o parse, então o
+     bloco abaixo já encontra os custom elements definidos. -->
+<script>document.write('<scr' + 'ipt src="../dist/mw-rainbow-card.js?t=' + Date.now() + '"></scr' + 'ipt>');</script>
 <script>
 const S = (state, attrs) => ({ state: String(state), attributes: attrs });
 const mkHass = (t) => ({

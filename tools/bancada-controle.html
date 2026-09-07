@@ -1,0 +1,178 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>bancada mw-rainbow-card — a faixa que comanda</title>
+<style>
+  body{font:14px system-ui;margin:0;padding:20px;background:var(--bg,#101012);color:var(--fg,#eee)}
+  body.claro{--bg:#e9e7e2;--fg:#1a1a1a}
+  h3{margin:24px 0 4px;font-size:13px;letter-spacing:.08em;text-transform:uppercase;opacity:.65}
+  p.nota{margin:0 0 12px;font-size:12px;opacity:.55;max-width:74ch}
+  .lado{display:grid;grid-template-columns:1fr 340px;gap:24px;align-items:start}
+  .cel{margin-bottom:18px}
+  .cap{font-size:11px;opacity:.6;margin-top:6px}
+  #log{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;background:#0006;border:1px solid #8883;
+    border-radius:10px;padding:10px;height:70vh;overflow:auto;position:sticky;top:20px}
+  body.claro #log{background:#fff8;color:#222}
+  #log b{color:#7fd}
+  body.claro #log b{color:#06c}
+  button{font:inherit;padding:6px 12px;border-radius:8px;border:1px solid #8886;background:#8882;color:inherit;cursor:pointer}
+</style>
+<button onclick="document.body.classList.toggle('claro')">alternar tema da página</button>
+<button onclick="document.getElementById('log').innerHTML=''">limpar registro</button>
+<div class="lado">
+  <div id="host"></div>
+  <div id="log"><i>As chamadas de serviço aparecem aqui — nada é enviado para a casa.</i></div>
+</div>
+<!-- O navegador cacheia o módulo vizinho e a bancada passa a mentir: você
+     edita o dist, recarrega, e continua vendo o código velho. O carimbo de
+     tempo mata isso. document.write é síncrono durante o parse, então o
+     bloco abaixo já encontra os custom elements definidos. -->
+<script>document.write('<scr' + 'ipt src="../dist/mw-rainbow-card.js?t=' + Date.now() + '"></scr' + 'ipt>');</script>
+<script>
+/* Bancada do fader. Prova o gesto sem acender lâmpada nenhuma às três da
+ * manhã: o `callService` não fala com o Home Assistant — ele ESCREVE na tela,
+ * e o estado local muda como se a casa tivesse respondido.
+ *
+ * Não abre por file://:
+ *   python3 -m http.server 8765 → http://localhost:8765/tools/bancada-controle.html
+ *
+ * O que dá para conferir aqui com o dedo/mouse:
+ *   - arrastar ao longo da célula muda o nível, e só solta UMA chamada
+ *   - tocar liga/desliga
+ *   - segurar abre o more-info (aqui só registra)
+ *   - a tomada não arrasta (não tem nível): só toque
+ *   - a luz colorida pinta com a cor real dela
+ */
+const S = (state, attrs) => ({ state: String(state), attributes: attrs || {} });
+const log = document.getElementById("log");
+const escrever = (txt) => {
+  const l = document.createElement("div");
+  l.innerHTML = `<b>${new Date().toLocaleTimeString("pt-BR")}</b> ${txt}`;
+  log.prepend(l);
+};
+
+const states = {
+  "light.mesa": S("on", { brightness: 128, supported_color_modes: ["brightness"], friendly_name: "Mesa" }),
+  "light.sala": S("on", { brightness: 230, rgb_color: [255, 70, 40], supported_color_modes: ["rgb"], friendly_name: "Sala" }),
+  "light.suite": S("on", { brightness: 90, color_temp_kelvin: 2200, supported_color_modes: ["color_temp"], friendly_name: "Suíte" }),
+  "light.varanda": S("off", { supported_color_modes: ["brightness"], friendly_name: "Varanda" }),
+  "switch.chuveiro": S("off", { friendly_name: "Chuveiro" }),
+  "switch.tomada": S("on", { friendly_name: "Tomada da bancada" }),
+  "fan.ventilador": S("on", { percentage: 66, friendly_name: "Ventilador" }),
+  "cover.cortina": S("open", { current_position: 40, friendly_name: "Cortina" }),
+  "input_boolean.modo_festa": S("off", { friendly_name: "Modo festa" }),
+};
+const entities = {}, devices = {};
+Object.keys(states).forEach((id, i) => {
+  entities[id] = { device_id: `d${i}` };
+  devices[`d${i}`] = { name: states[id].attributes.friendly_name };
+});
+
+let hass;
+const aplicar = (id, mudanca) => {
+  states[id] = S(mudanca.state ?? states[id].state,
+    { ...states[id].attributes, ...(mudanca.attributes || {}) });
+  hass = { ...hass, states: { ...states } };
+  cartoes.forEach((c) => { c.hass = hass; });
+};
+
+hass = {
+  states, entities, devices, areas: {}, locale: { language: "pt-BR" },
+  // O dublê: registra e responde como a casa responderia.
+  callService(dominio, servico, dados) {
+    const id = dados.entity_id;
+    escrever(`<code>${dominio}.${servico}</code> ${JSON.stringify(dados)}`);
+    setTimeout(() => {
+      if (servico === "toggle") {
+        const lig = ["on", "open"].includes(states[id].state);
+        aplicar(id, { state: lig ? (id.startsWith("cover.") ? "closed" : "off") : (id.startsWith("cover.") ? "open" : "on") });
+      } else if (servico === "turn_off") aplicar(id, { state: "off" });
+      else if (servico === "turn_on") {
+        aplicar(id, { state: "on", attributes: dados.brightness_pct !== undefined
+          ? { brightness: Math.round(dados.brightness_pct * 2.55) } : {} });
+      } else if (servico === "set_percentage") aplicar(id, { attributes: { percentage: dados.percentage } });
+      else if (servico === "set_cover_position") aplicar(id, { attributes: { current_position: dados.position } });
+    }, 180); // atraso de propósito: é ele que o "respiro" de 700 ms cobre
+  },
+};
+
+const host = document.getElementById("host");
+const cartoes = [];
+const cartao = (cap, cfg) => {
+  const cel = document.createElement("div");
+  cel.className = "cel";
+  const el = document.createElement("mw-rainbow-card");
+  el.setConfig(cfg);
+  el.hass = hass;
+  el.shadowRoot.innerHTML += "<style>ha-card{display:block}ha-icon{display:none}</style>";
+  el.addEventListener("hass-more-info", (ev) => escrever(`<i>more-info</i> ${ev.detail.entityId}`));
+  cartoes.push(el);
+  const legenda = document.createElement("div");
+  legenda.className = "cap";
+  legenda.textContent = cap;
+  cel.append(el, legenda);
+  return cel;
+};
+const secao = (titulo, nota, itens) => {
+  const h = document.createElement("h3"); h.textContent = titulo;
+  const p = document.createElement("p"); p.className = "nota"; p.textContent = nota;
+  host.append(h, p);
+  itens.forEach(([cap, cfg]) => host.appendChild(cartao(cap, cfg)));
+};
+
+const luzes = ["light.mesa", "light.sala", "light.suite", "light.varanda"];
+secao("O fader — arraste ao longo da célula",
+  "Toque liga/desliga. Arrastar ajusta o brilho: a célula É o cursor. Só sai UMA chamada de serviço, no soltar — o dedo pinta local enquanto arrasta.", [
+  ["quatro luzes: a cor de cada célula é a cor real da lâmpada", {
+    name: "Luzes da casa",
+    sections: luzes.map((id) => ({ entities: { control: id } })),
+    bands: [{ metric: "control" }], band_height: 46, section_labels: "all" }],
+  ["com a costura ligada, a fileira vira uma fita com as cores da casa", {
+    name: "Luzes da casa — costurado",
+    sections: luzes.map((id) => ({ entities: { control: id } })),
+    bands: [{ metric: "control" }], band_height: 46, blend: true, blend_amount: 100 }],
+]);
+
+secao("Domínios sem nível: só toque",
+  "Tomada e input_boolean não têm o que arrastar — o gesto seria mentira. Eles não recebem touch-action, então a tela continua rolando por cima deles no celular.", [
+  ["tomada, chuveiro e modo festa", {
+    name: "Liga/desliga",
+    sections: [{ entities: { control: "switch.tomada" } },
+      { entities: { control: "switch.chuveiro" } },
+      { entities: { control: "input_boolean.modo_festa" } }],
+    bands: [{ metric: "control" }], band_height: 46, section_labels: "all" }],
+  ["o chuveiro com confirmação (confirm: true) — não se liga por engano", {
+    name: "Com confirmação",
+    sections: [{ entities: { control: "switch.chuveiro" } }],
+    bands: [{ metric: "control", confirm: true }], band_height: 46,
+    paper_color: "paper", depth: "3d" }],
+]);
+
+secao("Ventilador e cortina",
+  "Mesmo fader, outros serviços: set_percentage e set_cover_position.", [
+  ["ventilador (66 %) e cortina (40 %)", {
+    name: "Ar e janela",
+    sections: [{ entities: { control: "fan.ventilador" } }, { entities: { control: "cover.cortina" } }],
+    bands: [{ metric: "control" }], band_height: 46, section_labels: "all" }],
+]);
+
+secao("Comando e leitura na mesma tira",
+  "É para isto que a faixa existe: ver o ambiente e mexer nele sem trocar de card.", [
+  ["luz + tomada + as leituras do ambiente", {
+    name: "Sala",
+    sections: luzes.map((id) => ({ entities: { control: id } })),
+    bands: [{ metric: "control" }], band_height: 40,
+    paper_color: "blue-6", paper_dark: true, depth: "3d" }],
+]);
+
+secao("Sentido invertido e vertical",
+  "O arrasto acompanha o sentido da faixa: no rtl e no btt ele anda para o outro lado.", [
+  ["rtl — da direita para a esquerda", {
+    name: "Invertido",
+    sections: luzes.map((id) => ({ entities: { control: id } })),
+    bands: [{ metric: "control" }], band_height: 46, direction: "rtl" }],
+  ["vertical — arrasta de baixo para cima", {
+    name: "Vertical",
+    sections: luzes.map((id) => ({ entities: { control: id } })),
+    bands: [{ metric: "control" }], orientation: "vertical", length: 220, band_height: 60 }],
+]);
+</script>

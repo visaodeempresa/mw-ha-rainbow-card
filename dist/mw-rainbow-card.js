@@ -59,6 +59,13 @@
     paper_color: "none",       // none | paper | <matiz>-<1..7>
     paper_dark: false,         // a mesma chave, lida na rampa de noite
     depth: "soft",             // flat | soft | 3d — substitui shadow/lift
+    // --- editor ---
+    // Filtro da lista de dispositivos do editor. NÃO afeta a tela: é só para
+    // a lista não virar um paredão de 400 dispositivos na hora de montar.
+    // O padrão é `clima` porque é o que o card sempre fez, e porque é o que
+    // deixa a montagem prática: quase toda seção nasce de um sensor de
+    // temperatura/umidade.
+    device_filter: "clima",
     // --- ações ---
     tap_action: "auto",        // auto = cada célula abre o seu sensor
     hold_action: "none",
@@ -613,6 +620,144 @@
   };
   // <<< mw-electrical-scale v1
 
+  // >>> touch-feedback v2 — fonte canônica: /Volumes/SSD-T1-01/CLAUDE-SSD/IA/lib/touch-feedback/touch-feedback-v2.js
+  // feedback táctil: o app companion (iOS/Android) escuta o evento "haptic" na
+  // window e chama o motor de vibração nativo — é assim que o próprio frontend
+  // do HA vibra. Fora do app não existe essa ponte, então cai no
+  // navigator.vibrate (funciona no Chrome do Android; o Safari do iPhone não
+  // vibra em página nenhuma, só dentro do companion).
+  const VIBRATE_MS = { selection: 5, light: 10, success: 15, medium: 20, warning: 25, heavy: 30, failure: 40 };
+  const inCompanionApp = () =>
+    !!(window.externalApp || window.webkit?.messageHandlers?.externalBus);
+  const haptic = (kind) => {
+    try {
+      window.dispatchEvent(new CustomEvent("haptic",
+        { bubbles: true, composed: true, detail: kind }));
+      // sem a ponte do companion o evento morre sem ninguém escutando
+      if (!inCompanionApp() && navigator.vibrate) navigator.vibrate(VIBRATE_MS[kind] ?? 10);
+    } catch (_) { /* vibração é enfeite: nunca pode derrubar o toque */ }
+  };
+
+  // confirmação da ação (desligada por default). Duas decisões deliberadas:
+  // 1) o diálogo é montado no document.body, não no shadow root do card —
+  //    dentro dele o overflow:hidden do botão cortaria o modal;
+  // 2) não usa window.confirm: o WebView do companion pode engolir o diálogo
+  //    nativo e devolver false sozinho, e aí a ação nunca aconteceria.
+  // O texto aceita {nome} e {acao} → "Tem certeza que quer desligar MESA?".
+  // O card hospedeiro oferece as chaves confirm/confirm_text; o texto de
+  // reserva mora aqui para o bloco não depender do DEFAULTS de ninguém.
+  const CONFIRM_FALLBACK = "Tem certeza que quer {acao} {nome}?";
+  const CONFIRM_PAPER = "linear-gradient(145deg, #fdfaf3, #e8e3d8)";
+  // tinta de reserva: o mesmo par de paperInk(), repetido aqui para o bloco
+  // continuar colável em card que não embute a paleta escura.
+  const CONFIRM_INK = (dark) => (dark
+    ? { text: "rgba(247, 244, 236, 0.94)", dim: "rgba(247, 244, 236, 0.62)", line: "rgba(255, 255, 255, 0.14)" }
+    : { text: "rgba(28, 25, 20, 0.92)", dim: "rgba(28, 25, 20, 0.58)", line: "rgba(0, 0, 0, 0.14)" });
+
+  // O relevo do papel é o MESMO vocabulário dos botões MW, e por isso a
+  // hierarquia sai de graça: "Confirmar" é papel saliente (o botão ligado) e
+  // "Cancelar" é papel afundado (o botão desligado). Ninguém precisa de cor de
+  // alerta para saber qual é qual.
+  const paper3dSkin = (bg, dark) => {
+    // no papel escuro o brilho interno de cima tem que cair muito: 0.80 de
+    // branco sobre grafite vira risco de giz, não luz.
+    const lit = dark ? "rgba(255,255,255,0.10)" : "rgba(255,250,235,0.80)";
+    const litSoft = dark ? "rgba(255,255,255,0.07)" : "rgba(255,250,235,0.85)";
+    const dent = dark ? "rgba(0,0,0,0.50)" : "rgba(0,0,0,0.08)";
+    const edge = dark ? "rgba(255,255,255,0.10)" : "rgba(180,180,180,0.55)";
+    const drop = dark ? "rgba(0,0,0,0.70)" : "rgba(0,0,0,0.50)";
+    // botão e balão são o MESMO papel, e só o relevo não basta para separá-los
+    // — nos tons encardidos (claros ou escuros) o botão sumia dentro do balão.
+    // Uma camada de tinta por cima da folha resolve sem inventar segunda cor:
+    // o saliente clareia, o afundado escurece, os dois na mesma matéria.
+    const tint = (v) => `linear-gradient(${v}, ${v}), ${bg}`;
+    const upBg = tint(dark ? "rgba(255,255,255,0.075)" : "rgba(255,255,255,0.34)");
+    const downBg = tint(dark ? "rgba(0,0,0,0.30)" : "rgba(0,0,0,0.055)");
+    return {
+      box: `background:${bg};border:1px solid ${edge};
+        box-shadow:0 18px 50px ${drop}, 0 0 8px 2px rgba(0,0,0,0.28),
+          inset 2px 2px 4px ${lit}, inset -2px -2px 4px ${dent};`,
+      // saliente: luz em cima à esquerda, sombra projetada embaixo
+      up: `background:${upBg};border:1px solid ${edge};
+        box-shadow:inset 1px 1px 2px ${litSoft}, inset -1px -1px 2px ${dent},
+          0 3px 6px rgba(0,0,0,${dark ? "0.45" : "0.22"});`,
+      // afundado: a sombra vai para dentro — mesmo estado "desligado" do card
+      down: `background:${downBg};border:1px solid ${edge};
+        box-shadow:inset 2px 2px 5px rgba(0,0,0,${dark ? "0.55" : "0.30"}),
+          inset -1px -1px 3px ${dark ? "rgba(255,255,255,0.05)" : "rgba(255,255,255,0.45)"};`,
+    };
+  };
+
+  const confirmAction = (tpl, nome, acao, opts) => new Promise((resolve) => {
+    const o = opts || {};
+    const msg = String(tpl || CONFIRM_FALLBACK)
+      .replace(/\{nome\}/g, nome).replace(/\{acao\}/g, acao);
+    const dark = o.dark === true;
+    const ink = o.ink || CONFIRM_INK(dark);
+    const bg = o.bg || CONFIRM_PAPER;
+    const three = o.paper3d === true;
+    const skin = three ? paper3dSkin(bg, dark) : null;
+
+    // v1 chapado × v2 em relevo: as duas peles saem daqui, e o resto do
+    // diálogo (foco, Esc, clique no fundo) é idêntico nos dois casos.
+    const boxCss = three ? skin.box
+      : `background:${CONFIRM_PAPER};box-shadow:0 10px 40px rgba(0,0,0,0.45), inset 2px 2px 4px rgba(255,250,235,0.80);`;
+    const textCol = three ? ink.text : "#1a1a1a";
+    const noCss = three ? skin.down + `color:${ink.text};`
+      : "background:rgba(0,0,0,0.06);color:#1a1a1a;border:1px solid rgba(0,0,0,0.18);";
+    const yesCss = three ? skin.up + `color:${ink.text};`
+      : "background:#1a1a1a;color:#fdfaf3;border:1px solid #1a1a1a;";
+    // o toque tem que responder na hora: pressionar afunda o saliente e
+    // levanta o afundado, os dois trocando de lugar como papel de verdade.
+    const pressCss = three
+      ? `.bt button:active{${skin.down}transform:translateY(1px);}
+         .bt button.no:active{${skin.up}transform:translateY(1px);}`
+      : ".bt button:active{transform:translateY(1px);}";
+
+    const host = document.createElement("div");
+    host.attachShadow({ mode: "open" });
+    host.shadowRoot.innerHTML = `
+      <style>
+        .ov{position:fixed;inset:0;z-index:9999;display:flex;align-items:center;justify-content:center;
+          background:rgba(0,0,0,${three && dark ? "0.68" : "0.55"});padding:16px;}
+        .box{max-width:min(420px,86vw);border-radius:14px;padding:22px 22px 16px;
+          color:${textCol};font-family:inherit;font-size:15px;line-height:1.45;text-align:center;
+          ${boxCss}}
+        .bt{display:flex;gap:10px;margin-top:20px;}
+        button{flex:1;padding:11px 14px;border-radius:${three ? "12px" : "10px"};font:inherit;font-size:14px;
+          font-weight:600;cursor:pointer;-webkit-tap-highlight-color:transparent;
+          transition:box-shadow .15s ease,transform .1s ease;}
+        .no{${noCss}}
+        .yes{${yesCss}}
+        ${pressCss}
+      </style>
+      <div class="ov"><div class="box"><div class="msg"></div>
+        <div class="bt"><button class="no">Cancelar</button><button class="yes">Confirmar</button></div>
+      </div></div>`;
+    // textContent, não innerHTML: o texto vem do YAML do dono, mas nome de
+    // entidade não tem por que virar HTML.
+    host.shadowRoot.querySelector(".msg").textContent = msg;
+    const close = (ok) => {
+      window.removeEventListener("keydown", onKey, true);
+      host.remove();
+      resolve(ok);
+    };
+    const onKey = (ev) => {
+      if (ev.key === "Escape") { ev.stopPropagation(); close(false); }
+      else if (ev.key === "Enter") { ev.stopPropagation(); close(true); }
+    };
+    host.shadowRoot.querySelector(".yes").addEventListener("click", () => close(true));
+    host.shadowRoot.querySelector(".no").addEventListener("click", () => close(false));
+    // clique no fundo = cancelar (mesma saída do Esc)
+    host.shadowRoot.querySelector(".ov").addEventListener("click", (ev) => {
+      if (ev.target === ev.currentTarget) close(false);
+    });
+    window.addEventListener("keydown", onKey, true);
+    document.body.appendChild(host);
+    host.shadowRoot.querySelector(".yes").focus();
+  });
+  // <<< touch-feedback v2
+
   /* ---------------------------- cor por faixa ---------------------------- */
 
   const parseColor = (str) => {
@@ -792,6 +937,12 @@
       scale: (a, b) => cached(`cur:${a}:${num(b && b.max, 20)}`,
         () => mwCurrentScale(num(b && b.max, 20), a)),
     },
+    control: {
+      label: "Controle", icon: "mdi:toggle-switch-variant", dc: null,
+      unit: "", decimals: 0, control: true,
+      // Não usa escala: a cor vem do estado da própria entidade.
+      scale: () => ({ stops: [], colors: [], clamp: null }),
+    },
     co2: airMetric("co2", "CO₂", "mdi:molecule-co2", "carbon_dioxide",
       ["_dioxido_de_carbono", "_carbon_dioxide", "_co2"], 0),
     tvoc: airMetric("tvoc", "TVOC", "mdi:air-filter", "volatile_organic_compounds_parts",
@@ -801,6 +952,73 @@
     pm25: airMetric("pm25", "PM2.5", "mdi:blur", "pm25",
       ["_pm25", "_pm2_5", "_pm2"], 0),
   });
+
+  /* ------------------------------ CONTROLE ------------------------------ */
+  // A faixa que comanda. Domínios com nível de verdade (luz, ventilador,
+  // cortina) viram fader: a própria célula é o cursor. Domínios de liga/desliga
+  // (tomada, input_boolean) só respondem ao toque.
+  const CONTROL_DOMAINS = ["light", "switch", "fan", "cover", "input_boolean"];
+  const ON_STATES = new Set(["on", "open", "opening", "playing", "home"]);
+
+  // Nível 0..1 do que estiver ligado, ou null quando o domínio não tem nível.
+  const controlLevel = (st) => {
+    if (!st) return null;
+    const d = st.entity_id ? st.entity_id.split(".")[0] : "";
+    const a = st.attributes || {};
+    if (d === "light") {
+      if (!ON_STATES.has(st.state)) return 0;
+      return a.brightness === undefined || a.brightness === null
+        ? 1 : Math.max(0, Math.min(1, a.brightness / 255));
+    }
+    if (d === "fan") {
+      if (!ON_STATES.has(st.state)) return 0;
+      return a.percentage === undefined || a.percentage === null
+        ? 1 : Math.max(0, Math.min(1, a.percentage / 100));
+    }
+    if (d === "cover") {
+      if (a.current_position === undefined || a.current_position === null) {
+        return ON_STATES.has(st.state) ? 1 : 0;
+      }
+      return Math.max(0, Math.min(1, a.current_position / 100));
+    }
+    return ON_STATES.has(st.state) ? 1 : 0;
+  };
+  // Só estes aceitam arrastar; nos outros o gesto seria mentira.
+  const hasLevel = (id, st) => {
+    const d = String(id || "").split(".")[0];
+    const a = (st && st.attributes) || {};
+    if (d === "light") return !!(a.supported_color_modes || []).length || a.brightness !== undefined;
+    if (d === "fan") return a.percentage !== undefined || a.percentage_step !== undefined;
+    if (d === "cover") return a.current_position !== undefined;
+    return false;
+  };
+
+  // Temperatura de cor -> RGB, aproximação de corpo negro. A luz na tela fica
+  // da cor que ela está fazendo na parede — que é a graça de ver a casa numa
+  // tira só. Sem isto, toda lâmpada acesa seria do mesmo âmbar genérico.
+  const kelvinRgb = (k) => {
+    const t = Math.max(1000, Math.min(12000, Number(k) || 2700)) / 100;
+    const cl = (x) => Math.max(0, Math.min(255, Math.round(x)));
+    const r = t <= 66 ? 255 : 329.7 * Math.pow(t - 60, -0.1332);
+    const g = t <= 66 ? 99.47 * Math.log(t) - 161.12 : 288.12 * Math.pow(t - 60, -0.0755);
+    const b = t >= 66 ? 255 : (t <= 19 ? 0 : 138.52 * Math.log(t - 10) - 305.045);
+    return [cl(r), cl(g), cl(b)];
+  };
+
+  const CONTROL_OFF = "60, 62, 70";
+  const CONTROL_ON = "255, 193, 7";
+  // A cor da célula ligada: a cor REAL da luz quando ela informa uma.
+  const controlRgb = (st) => {
+    if (!st || !ON_STATES.has(st.state)) return CONTROL_OFF;
+    const a = st.attributes || {};
+    if (Array.isArray(a.rgb_color) && a.rgb_color.length === 3) return a.rgb_color.join(", ");
+    if (a.color_temp_kelvin) return kelvinRgb(a.color_temp_kelvin).join(", ");
+    if (a.color_temp) return kelvinRgb(1e6 / a.color_temp).join(", ");
+    const d = st.entity_id ? st.entity_id.split(".")[0] : "";
+    if (d === "cover") return "125, 172, 214";
+    if (d === "fan") return "110, 200, 190";
+    return CONTROL_ON;
+  };
 
   // Tensão nominal declarada na faixa; vazio ou "auto" devolve null e manda
   // escolher por célula.
@@ -858,8 +1076,11 @@
     if (!hass?.entities || !hass?.devices) return [];
     const ms = (metrics && metrics.length) ? metrics : ["temperature", "humidity"];
     const ids = new Set();
+    const querControle = ms.some((m) => METRICS[m] && METRICS[m].control);
     for (const id of Object.keys(hass.states)) {
-      if (!id.startsWith("sensor.")) continue;
+      const dominio = id.split(".")[0];
+      const controlavel = querControle && CONTROL_DOMAINS.includes(dominio);
+      if (dominio !== "sensor" && !controlavel) continue;
       if (!ms.some((m) => servesMetric(hass, id, m))) continue;
       const d = deviceOf(hass, id);
       if (d) ids.add(d);
@@ -869,6 +1090,11 @@
       .sort((a, b) => a.label.localeCompare(b.label, "pt-BR"));
   };
   const climateDevices = (hass) => metricDevices(hass, ["temperature", "humidity"]);
+
+  // "Todos" não é todo dispositivo do registro: é todo dispositivo que tem ao
+  // menos uma entidade que este card saberia usar. Listar impressora e roteador
+  // só faria o dono rolar mais.
+  const todosDispositivos = (hass) => metricDevices(hass, METRIC_KEYS);
 
   // Uma entidade serve à grandeza se a classe bate ou se o id termina numa das
   // pistas. Nada de "qualquer sensor do dispositivo": um dispositivo sem LQI
@@ -893,8 +1119,20 @@
     return allowed.some((a) => String(a).toLowerCase() === u);
   };
 
+  // Entidades controláveis do dispositivo — não são sensor.*, então têm
+  // caminho próprio. Preferência estável: luz, depois cortina, ventilador,
+  // tomada e por fim o auxiliar.
+  const ownControls = (hass, devId) => (devId && hass?.entities
+    ? Object.keys(hass.entities)
+      .filter((id) => hass.entities[id].device_id === devId
+        && CONTROL_DOMAINS.includes(id.split(".")[0]) && hass.states[id])
+      .sort((a, b) => CONTROL_DOMAINS.indexOf(a.split(".")[0])
+        - CONTROL_DOMAINS.indexOf(b.split(".")[0]) || a.localeCompare(b))
+    : []);
+
   const servesMetric = (hass, id, metric) => {
     const m = METRICS[metric] || {};
+    if (m.control) return CONTROL_DOMAINS.includes(String(id).split(".")[0]);
     if (m.dc && hasClass(hass, id, m.dc)) return true;
     const hints = m.hint ? [].concat(m.hint) : [];
     if (!hints.some((h) => id.endsWith(h))) return false;
@@ -904,23 +1142,39 @@
   // Lista para o select do editor: a do dispositivo primeiro; se ele não tem
   // nenhuma daquela grandeza, mostra o que houver para não deixar o campo vazio
   // — mas essa queda é só da interface, nunca da descoberta automática.
-  const sensorsFor = (hass, devId, metric) => {
-    const own = ownSensors(hass, devId);
-    let list = own.filter((id) => servesMetric(hass, id, metric));
-    if (!list.length) {
-      list = Object.keys(hass.states)
-        .filter((id) => id.startsWith("sensor.") && servesMetric(hass, id, metric));
+  // Devolve { proprias, fora }: as do dispositivo e, só quando ele não tem
+  // nenhuma da grandeza, as do resto da casa — separadas de propósito, para o
+  // editor poder dizer de onde cada opção vem em vez de misturar tudo.
+  const sensorsFor = (hass, devId, metric, opts) => {
+    if (METRICS[metric] && METRICS[metric].control) {
+      const suas = ownControls(hass, devId);
+      const enfeitar = (l) => l
+        .map((id) => ({ value: id, label: `${friendly(hass, id)} (${id})` }))
+        .sort((a, b) => a.label.localeCompare(b.label, "pt-BR"));
+      return suas.length
+        ? { proprias: enfeitar(suas), fora: [] }
+        : { proprias: [], fora: enfeitar(Object.keys(hass.states)
+          .filter((id) => CONTROL_DOMAINS.includes(id.split(".")[0]))) };
     }
-    if (!list.length) list = own.length ? own : Object.keys(hass.states).filter((id) => id.startsWith("sensor."));
-    return list
+    const own = (opts && opts.own) || ownSensors(hass, devId);
+    const proprias = own.filter((id) => servesMetric(hass, id, metric));
+    // Fora do dispositivo só quando ele não tem nenhuma — e SÓ da grandeza
+    // pedida. A versão antiga terminava com "senão, todos os sensores da
+    // casa": num BASE-ALFA-01 isso era um <select> com 1.091 opções, que não
+    // ajuda ninguém a escolher nada.
+    const foraDele = proprias.length ? [] : Object.keys(hass.states)
+      .filter((id) => id.startsWith("sensor.") && servesMetric(hass, id, metric));
+    const enfeitar = (l) => l
       .map((id) => ({ value: id, label: `${friendly(hass, id)} (${id})` }))
       .sort((a, b) => a.label.localeCompare(b.label, "pt-BR"));
+    return { proprias: enfeitar(proprias), fora: enfeitar(foraDele) };
   };
 
   // Descoberta automática: estrita. Sem entidade que sirva à grandeza naquele
   // dispositivo, devolve vazio — a célula fica cinza e honesta.
   const autoEntity = (hass, devId, metric) => {
     if (!hass || !devId) return "";
+    if (METRICS[metric] && METRICS[metric].control) return ownControls(hass, devId)[0] || "";
     return ownSensors(hass, devId)
       .filter((id) => servesMetric(hass, id, metric))
       .sort()[0] || "";
@@ -965,7 +1219,25 @@
     set hass(hass) {
       this._hass = hass;
       if (!this._config) return;
-      const key = this._cells().map((c) => (c.id && hass.states[c.id] ? hass.states[c.id].state : "·")).join("|");
+      // Dedo na tela manda mais que o Home Assistant: enquanto o arrasto está
+      // acontecendo o card não repinta, senão o eco do HA briga com o dedo e o
+      // cursor "volta sozinho" no meio do gesto.
+      if (this._grab) return;
+      // Logo depois de soltar, o HA ainda pode mandar o estado ANTIGO (a
+      // chamada de serviço não é instantânea). Neste respiro a pintura
+      // otimista fica de pé; passado ele, a verdade do HA volta a mandar.
+      if (this._settle && Date.now() < this._settle) return;
+      const key = this._cells().map((c) => {
+        const st = c.id ? hass.states[c.id] : null;
+        if (!st) return "·";
+        // Brilho de luz não muda o `state` (continua "on"): sem o nível na
+        // chave, arrastar em outro lugar não repintaria este card. É UM
+        // atributo a mais, e só nas células de controle.
+        if (METRICS[c.metric] && METRICS[c.metric].control) {
+          return `${st.state}:${controlLevel({ ...st, entity_id: c.id })}`;
+        }
+        return st.state;
+      }).join("|");
       if (key !== this._key) { this._key = key; this._render(); }
     }
 
@@ -1002,7 +1274,7 @@
       const c = this._config;
       const out = [];
       for (const b of c.bands) {
-        for (const s of c.sections) out.push({ id: this._entityOf(s, b.metric) });
+        for (const s of c.sections) out.push({ id: this._entityOf(s, b.metric), metric: b.metric });
       }
       return out;
     }
@@ -1029,6 +1301,17 @@
     _value(entityId, metric) {
       const m = METRICS[metric];
       const st = entityId ? this._hass.states[entityId] : null;
+      if (m.control) {
+        if (!st) return { text: "—", num: null, snum: null, unit: "", nivel: null, ligado: false };
+        const marcado = { ...st, entity_id: entityId };
+        const nivel = controlLevel(marcado);
+        const ligado = ON_STATES.has(st.state);
+        const podeNivel = hasLevel(entityId, st);
+        const text = !ligado ? "Desligado"
+          : (podeNivel ? `${Math.round(nivel * 100)}` : "Ligado");
+        return { text, num: nivel, snum: nivel, unit: ligado && podeNivel ? "%" : "",
+          nivel, ligado, podeNivel, rgb: controlRgb(marcado) };
+      }
       if (!st) return { text: "—", num: null, snum: null, unit: m.unit };
       const n = Number.parseFloat(st.state);
       const unit = st.attributes?.unit_of_measurement ?? m.unit;
@@ -1105,6 +1388,13 @@
         const scale = m.scale(a, b, stats);
 
         const cells = raw.map((x) => {
+          if (m.control) {
+            // A cor não vem de escala: vem do estado. Luz acesa pinta com a
+            // COR REAL dela — com a costura ligada, uma fileira de luzes vira
+            // uma fita com as cores que a casa está fazendo agora.
+            if (!x.id || !this._hass.states[x.id]) return { ...x, color: c.color_unavailable };
+            return { ...x, color: `rgba(${x.v.rgb}, ${a})` };
+          }
           // Tensão com nominal automático troca de régua por célula: rede e
           // pilha chegam no mesmo device_class.
           const sc = (m.cellScale && m.cellScale(a, b, x.v.snum)) || scale;
@@ -1118,6 +1408,18 @@
           const unit = c.show_units !== false && x.v.unit ? `<span class="u">${esc(x.v.unit)}</span>` : "";
           const nameHtml = labelsHere ? `<span class="lbl">${esc(x.name)}</span>` : "";
           const valHtml = showVals ? `<span class="val">${esc(x.v.text)}${unit}</span>` : "";
+          if (m.control) {
+            // O véu cobre a parte NÃO acesa. É um único <i> por célula, e ele
+            // se move por `transform` — nunca por width/left, que forçariam
+            // layout a cada quadro do arrasto (e reprovariam no CI da família).
+            const veu = x.v.podeNivel && x.v.ligado ? 1 - (x.v.nivel || 0) : (x.v.ligado ? 0 : 1);
+            const arrastavel = x.v.podeNivel ? " arr" : "";
+            return `<div class="cell ctl${arrastavel}" style="color:${esc(txt)}"
+              data-entity="${esc(x.id)}" data-band="${bi}"
+              title="${esc(x.name)} · ${esc(x.v.ligado ? "ligado" : "desligado")}"
+              ><i class="veu" style="transform:${vertical ? "scaleY" : "scaleX"}(${veu.toFixed(3)})"></i
+              >${nameHtml}${valHtml}</div>`;
+          }
           return `<div class="cell" style="color:${esc(txt)}" data-entity="${esc(x.id)}"
             title="${esc(x.name)} · ${esc(m.label)}">${nameHtml}${valHtml}</div>`;
         }).join("");
@@ -1193,6 +1495,22 @@
             cursor:pointer;padding:0 2px;
             ${c.divider ? `border-${vertical ? "bottom" : "right"}:1px solid rgba(0,0,0,0.18);` : ""}}
           .cell:last-child{border:none;}
+          /* --- a faixa que comanda ------------------------------------ */
+          /* position:relative só na célula de controle: as de leitura não
+             ganham contexto de empilhamento à toa. */
+          .cell.ctl{position:relative;}
+          /* touch-action fica SÓ aqui. Nas faixas de leitura o dedo tem de
+             continuar rolando a tela, como em qualquer card do HA. */
+          .cell.ctl.arr{touch-action:none;}
+          .cell.ctl > *{position:relative;z-index:1;}
+          /* O véu cobre a parte não acesa. Anima por transform e opacity —
+             nada de width/left, que forçam layout a cada quadro. */
+          .veu{position:absolute;inset:0;z-index:0;pointer-events:none;
+            background:rgba(0,0,0,0.55);
+            transform-origin:${vertical ? (dir === "btt" ? "top" : "bottom") : (reversed ? "left" : "right")};
+            transition:transform .18s ease;}
+          .cell.ctl.puxando .veu{transition:none;}
+          .cell.ctl.puxando{filter:none;}
           .lbl{font-size:${px(c.label_size) || "10px"};line-height:1.1;font-weight:600;
             max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;opacity:.95;}
           .val{font-size:${px(c.value_size) || "13px"};line-height:1.15;font-weight:700;
@@ -1222,31 +1540,205 @@
         { bubbles: true, composed: true, detail: { entityId } }));
     }
 
+    // Um listener por tipo de evento, no SHADOW ROOT — que sobrevive a todo
+    // render. Antes era um `click` por célula, refeito a cada leitura que
+    // chegava: num card de 8 seções × 6 faixas eram 48 listeners recriados o
+    // tempo todo. Delegar deixa o card mais leve DO QUE ERA, mesmo ganhando
+    // o comando.
     _wire() {
-      const c = this._config;
+      if (this._wired) return;
       const root = this.shadowRoot;
-      if ((c.tap_action || "auto") === "auto") {
-        root.querySelectorAll("[data-entity]").forEach((el) =>
-          el.addEventListener("click", (ev) => {
-            ev.stopPropagation();
-            this._moreInfo(el.dataset.entity);
-          }));
+      // Hospedeiro sem eventos (bancada, probe) não pode derrubar o card: o
+      // arco-íris continua sendo card de leitura, só não comanda.
+      if (!root || typeof root.addEventListener !== "function") return;
+      this._wired = true;
+      root.addEventListener("pointerdown", (ev) => this._aoTocar(ev));
+      root.addEventListener("pointerup", (ev) => this._aoSoltar(ev));
+      root.addEventListener("pointercancel", () => this._cancelar());
+      root.addEventListener("dblclick", () => this._run(this._config.double_tap_action));
+    }
+
+    _celulaDe(alvo) {
+      let el = alvo;
+      while (el && el !== this.shadowRoot) {
+        if (el.classList && el.classList.contains("cell")) return el;
+        el = el.parentNode || el.host;
       }
-      const card = root.querySelector("ha-card");
-      if (!card) return;
-      let holdTimer = null, held = false;
-      card.addEventListener("pointerdown", () => {
-        held = false;
-        holdTimer = setTimeout(() => { held = true; holdTimer = null; this._run(c.hold_action); }, 500);
+      return null;
+    }
+
+    // Fração 0..1 do ponteiro dentro da célula, já respeitando o sentido da
+    // faixa: no `rtl` e no `btt` o arrasto anda para o outro lado.
+    _fracao(el, ev) {
+      const r = el.getBoundingClientRect ? el.getBoundingClientRect() : null;
+      if (!r || !r.width || !r.height) return null;
+      const c = this._config;
+      const vertical = c.orientation === "vertical";
+      const dir = c.direction || (vertical ? "ttb" : "ltr");
+      let f = vertical ? (ev.clientY - r.top) / r.height : (ev.clientX - r.left) / r.width;
+      if (dir === "rtl" || dir === "btt") f = 1 - f;
+      return Math.max(0, Math.min(1, f));
+    }
+
+    _pintarNivel(el, f) {
+      const veu = el.querySelector && el.querySelector(".veu");
+      if (!veu) return;
+      const vertical = this._config.orientation === "vertical";
+      veu.style.transform = `${vertical ? "scaleY" : "scaleX"}(${(1 - f).toFixed(3)})`;
+      const val = el.querySelector(".val");
+      if (val) val.textContent = String(Math.round(f * 100));
+    }
+
+    _aoTocar(ev) {
+      const c = this._config;
+      const el = this._celulaDe(ev.target);
+      const id = el && el.dataset ? el.dataset.entity : "";
+      this._toque = { el, id, x: ev.clientX, y: ev.clientY, t: Date.now(), andou: false };
+      this._holdTimer = setTimeout(() => {
+        this._holdTimer = null;
+        this._toque.longo = true;
+        if (el && el.classList.contains("ctl")) this._moreInfo(id);
+        else this._run(c.hold_action);
+      }, 500);
+      if (!el || !el.classList.contains("arr") || !id) return;
+      // O `pointermove` só existe DURANTE o arrasto, e capturado no elemento:
+      // fora do gesto não há handler nenhum escutando o mouse passar.
+      this._mover = (e) => this._aoArrastar(e);
+      if (el.setPointerCapture) { try { el.setPointerCapture(ev.pointerId); } catch (erro) { /* sem captura, segue */ } }
+      el.addEventListener("pointermove", this._mover);
+      this._ponteiro = ev.pointerId;
+    }
+
+    _aoArrastar(ev) {
+      const t = this._toque;
+      if (!t || !t.el) return;
+      // O toque longo morre no PRIMEIRO movimento, de qualquer tamanho — e
+      // antes do limiar de 5 px. Quem começa um arrasto devagar (que é como se
+      // regula um brilho com cuidado) levava o more-info na cara aos 500 ms, e
+      // o gesto todo era perdido. Quem quer o more-info segura parado.
+      if (this._holdTimer) { clearTimeout(this._holdTimer); this._holdTimer = null; }
+      if (!t.andou && Math.abs(ev.clientX - t.x) < 5 && Math.abs(ev.clientY - t.y) < 5) return;
+      if (!t.andou) {
+        t.andou = true;
+        this._grab = true;
+        t.el.classList.add("puxando");
+        haptic("selection");
+      }
+      // No máximo uma pintura por quadro: o dedo manda dezenas de eventos por
+      // segundo e o navegador só desenha 60 vezes.
+      // A fração é guardada FORA do rAF: é ela que vira chamada de serviço no
+      // soltar. Se o navegador congelar o rAF (aba oculta, economia de
+      // bateria), a pintura otimista some — o comando, não.
+      t.f = this._fracao(t.el, ev);
+      if (this._raf || typeof requestAnimationFrame !== "function") return;
+      this._raf = requestAnimationFrame(() => {
+        this._raf = 0;
+        if (this._toque && this._toque.el && this._toque.f !== null) {
+          this._pintarNivel(this._toque.el, this._toque.f);
+        }
       });
-      ["pointerleave", "pointercancel"].forEach((t) => card.addEventListener(t, () => {
-        if (holdTimer) { clearTimeout(holdTimer); holdTimer = null; }
-      }));
-      card.addEventListener("pointerup", () => {
-        if (holdTimer) { clearTimeout(holdTimer); holdTimer = null; }
-        if (!held && (c.tap_action || "auto") !== "auto") this._run(c.tap_action);
+    }
+
+    _soltarCaptura() {
+      const t = this._toque;
+      if (t && t.el && this._mover) {
+        t.el.removeEventListener("pointermove", this._mover);
+        if (t.el.releasePointerCapture && this._ponteiro !== undefined) {
+          try { t.el.releasePointerCapture(this._ponteiro); } catch (erro) { /* já solto */ }
+        }
+        t.el.classList.remove("puxando");
+      }
+      this._mover = null;
+      this._ponteiro = undefined;
+    }
+
+    _cancelar() {
+      if (this._holdTimer) { clearTimeout(this._holdTimer); this._holdTimer = null; }
+      this._soltarCaptura();
+      this._grab = false;
+      this._toque = null;
+    }
+
+    _aoSoltar(ev) {
+      const c = this._config;
+      const t = this._toque;
+      if (this._holdTimer) { clearTimeout(this._holdTimer); this._holdTimer = null; }
+      if (!t) return;
+      const arrastou = t.andou;
+      const el = t.el;
+      const id = t.id;
+      const f = t.f;
+      this._soltarCaptura();
+      this._grab = false;
+      this._toque = null;
+      if (t.longo) return;
+
+      if (arrastou && el && id) {
+        this._respirar();
+        this._definirNivel(id, f === null || f === undefined ? this._fracao(el, ev) : f);
+        return;
+      }
+      if (el && el.classList.contains("ctl") && id) { this._alternar(id, el); return; }
+      // célula de leitura: o comportamento de sempre
+      if ((c.tap_action || "auto") === "auto") { if (id) this._moreInfo(id); return; }
+      this._run(c.tap_action);
+    }
+
+    // Respiro depois de soltar: o eco atrasado do HA não desfaz o que o dedo
+    // acabou de pintar. Findo o respiro, a verdade do HA volta a mandar —
+    // mesmo que nenhum estado novo chegue.
+    _respirar() {
+      this._settle = Date.now() + 700;
+      clearTimeout(this._settleTimer);
+      this._settleTimer = setTimeout(() => {
+        this._settle = 0;
+        this._key = null;
+        if (this._hass && this._config) this._render();
+      }, 720);
+    }
+
+    _confirmarSePreciso(id, acao) {
+      const c = this._config;
+      const banda = (c.bands || []).find((b) => METRICS[b.metric] && METRICS[b.metric].control && b.confirm);
+      if (!banda) return Promise.resolve(true);
+      const nome = friendly(this._hass, id);
+      const tpl = typeof banda.confirm === "string" ? banda.confirm : "Tem certeza que quer {acao} {nome}?";
+      return confirmAction(tpl, nome, acao, {
+        paper3d: c.depth === "3d",
+        bg: c.paper_color && c.paper_color !== "none"
+          ? (c.paper_dark ? paperDarkGradient(c.paper_color) : paperGradient(c.paper_color))
+          : undefined,
+        dark: !!c.paper_dark,
+        ink: paperInk(!!c.paper_dark),
       });
-      card.addEventListener("dblclick", () => this._run(c.double_tap_action));
+    }
+
+    _alternar(id, el) {
+      const st = this._hass.states[id];
+      if (!st) return;
+      const ligado = ON_STATES.has(st.state);
+      this._confirmarSePreciso(id, ligado ? "desligar" : "ligar").then((ok) => {
+        if (!ok) return;
+        haptic("light");
+        this._respirar();
+        if (el) this._pintarNivel(el, ligado ? 0 : 1);
+        this._hass.callService(id.split(".")[0], "toggle", { entity_id: id });
+      });
+    }
+
+    _definirNivel(id, f) {
+      if (f === null || f === undefined) return;
+      const dominio = id.split(".")[0];
+      const pct = Math.round(f * 100);
+      haptic("light");
+      if (dominio === "light") {
+        if (pct <= 0) this._hass.callService("light", "turn_off", { entity_id: id });
+        else this._hass.callService("light", "turn_on", { entity_id: id, brightness_pct: pct });
+      } else if (dominio === "fan") {
+        this._hass.callService("fan", "set_percentage", { entity_id: id, percentage: pct });
+      } else if (dominio === "cover") {
+        this._hass.callService("cover", "set_cover_position", { entity_id: id, position: pct });
+      }
     }
 
     _run(action) {
@@ -1299,7 +1791,7 @@
     paper_color: "Cor do papel",
     paper_dark: "Papel de noite (e o relevo lido no escuro)",
     depth: "Relevo",
-    tap_action: "Toque",
+    tap_action: "Toque (nas faixas de leitura)",
     hold_action: "Toque longo",
     double_tap_action: "Toque duplo",
     navigation_path: "Caminho para navegar (ação Navegar)",
@@ -1309,6 +1801,7 @@
     color_text_light: "Texto claro (fundo escuro)",
     color_name: "Nome do card: texto",
     color_band_label: "Identificação da faixa: texto",
+    device_filter: "Lista de dispositivos do editor",
   };
 
   const COLOR_FIELDS = ["color_unavailable", "color_text_dark", "color_text_light"];
@@ -1317,12 +1810,37 @@
   // enfeite: ele diz de onde vem a cor, que é a pergunta que o dono faz
   // quando um número pinta diferente do que ele esperava.
   const METRIC_GROUPS = [
+    ["Comando", ["control"]],
     ["Clima (regra 40)", ["temperature", "humidity"]],
     ["Qualidade do ar (regra 90)", ["co2", "tvoc", "hcho", "pm25"]],
     ["Elétrico (regra 180)", ["power", "energy", "voltage", "current"]],
     ["Nível", ["illuminance", "battery"]],
     ["Rádio", ["rssi", "lqi"]],
   ];
+
+  // Filtros da lista de dispositivos do editor. `clima` é o padrão histórico
+  // do card; `card` segue as faixas montadas; os outros são atalhos por
+  // família, para quem está montando um arco-íris de um assunto só.
+  const DEVICE_FILTERS = [
+    { value: "clima", label: "Clima — temperatura e/ou umidade (padrão)",
+      metrics: ["temperature", "humidity"] },
+    { value: "card", label: "As grandezas deste card", metrics: null },
+    { value: "ar", label: "Qualidade do ar", metrics: ["co2", "tvoc", "hcho", "pm25"] },
+    { value: "eletrico", label: "Elétrico — potência, consumo, tensão, corrente",
+      metrics: ["power", "energy", "voltage", "current"] },
+    { value: "nivel", label: "Nível — iluminância e bateria",
+      metrics: ["illuminance", "battery"] },
+    { value: "radio", label: "Rádio — RSSI e LQI", metrics: ["rssi", "lqi"] },
+    { value: "controle", label: "Comandáveis — luz, tomada, ventilador, cortina",
+      metrics: ["control"] },
+    { value: "todos", label: "Todos os dispositivos", metrics: "*" },
+  ];
+  // Filtro cuja grandeza não existe neste build não vira opção: ele
+  // resolveria para lista vazia e pareceria um bug. É assim que o filtro
+  // «comandáveis» aparece sozinho quando a faixa de comando existe, e some
+  // sozinho quando não existe.
+  const deviceFilters = () => DEVICE_FILTERS.filter((f) =>
+    f.metrics === null || f.metrics === "*" || f.metrics.some((m) => METRICS[m]));
 
   // As grandezas que este card realmente usa, na ordem das faixas.
   const usedMetrics = (config) => {
@@ -1357,6 +1875,14 @@
       return `<div class="xtra"><label><span>Máximo da régua (kWh)</span>
         <input type="number" min="0.1" step="0.1" data-band="${i}" data-field="max"
           placeholder="o maior da faixa" value="${b.max ?? ""}"></label></div>`;
+    }
+    if (m === "control") {
+      const cur = b.confirm ? "1" : "";
+      return `<div class="xtra"><label><span>Pedir confirmação</span>
+        <select data-band="${i}" data-field="confirm">
+          <option value=""${cur ? "" : " selected"}>Não — toque liga e desliga direto</option>
+          <option value="1"${cur ? " selected" : ""}>Sim — para carga que não se liga por engano</option>
+        </select></label></div>`;
     }
     if (m === "battery") {
       const cur = String(b.scale || "fina");
@@ -1549,6 +2075,10 @@
     /* ---- seções: uma por dispositivo, com as entidades por grandeza ---- */
 
     _paintSections() {
+      // Quais seções estão com o painel de entidades aberto. Mora na
+      // instância (não no DOM) porque o DOM é refeito por innerHTML — ler o
+      // estado de lá depois da reconstrução seria ler o que já se perdeu.
+      this._abertos = this._abertos || new Set();
       const sig = JSON.stringify(this._config.sections || []);
       if (this._secEl && sig === this._sigSec) return; // nada mudou: não mexer
       this._sigSec = sig;
@@ -1559,28 +2089,17 @@
         this.appendChild(this._secEl);
       }
       const hass = this._hass;
-      // A lista de dispositivos segue as grandezas do card: uma tomada com
-      // medição de potência não aparecia aqui quando só clima contava.
-      const devs = hass ? metricDevices(hass, usedMetrics(this._config)) : [];
+      const devs = hass ? this._dispositivos() : [];
       const secs = this._config.sections || [];
       const rows = secs.map((s, i) => {
         const opts = [`<option value="">— escolher dispositivo —</option>`].concat(
           devs.map((d) => `<option value="${esc(d.value)}"${d.value === s.device ? " selected" : ""}>${esc(d.label)}</option>`),
         ).join("");
-        // Só as grandezas que este card realmente usa. Antes eram cinco
-        // fixas; com quatorze no registro, desenhar todas seria um paredão de
-        // selects — e quase todos vazios.
-        const usadas = usedMetrics(this._config);
-        const extras = usadas.map((m) => {
-          const key = ENTITY_KEY[m];
-          const cur = (s.entities && s.entities[m]) || (key ? s[key] : "") || "";
-          const list = hass ? sensorsFor(hass, s.device, m) : [];
-          const o = [`<option value="">— automático —</option>`].concat(
-            list.map((e) => `<option value="${esc(e.value)}"${e.value === cur ? " selected" : ""}>${esc(e.label)}</option>`),
-          ).join("");
-          return `<label class="ent"><span>${esc(METRICS[m].label)}</span>
-            <select data-sec="${i}" data-metric="${esc(m)}">${o}</select></label>`;
-        }).join("");
+        // Painel fechado não custa nada: os selects de entidade só nascem
+        // quando o dono abre a seção. Com a casa real (2.931 estados), montar
+        // todos de uma vez dava 2.469 <option> e 317 KB de HTML refeitos a
+        // cada repintura — 28 ms de travada por nada.
+        const extras = this._abertos.has(i) ? this._selectsDeEntidade(s, i) : "";
         return `<div class="row">
           <div class="head">
             <b>${i + 1}</b>
@@ -1594,14 +2113,55 @@
           <details class="adv"><summary>entidades desta seção</summary><div class="ents">${extras}</div></details>
         </div>`;
       }).join("");
-      // o que estava aberto continua aberto depois da reconstrução
-      const abertos = Array.from(this._secEl.querySelectorAll("details.adv")).map((d) => d.open);
+
+      const fAtual = String(this._config.device_filter || DEFAULTS.device_filter);
+      const fOpts = deviceFilters().map((x) =>
+        `<option value="${x.value}"${x.value === fAtual ? " selected" : ""}>${esc(x.label)}</option>`).join("");
+      const fora = devs.filter((d) => d.fora).length;
+      // Com o filtro de clima num card só de potência, a lista fica cheia de
+      // dispositivo que não serve às faixas montadas. Em vez de trocar o
+      // filtro por baixo do dono (mágica que confunde), o editor CONTA quantos
+      // ele está escondendo e diz o que fazer.
+      const doCard = hass ? metricDevices(hass, usedMetrics(this._config)) : [];
+      const jaTem = new Set(devs.map((d) => d.value));
+      const escondidos = doCard.filter((d) => !jaTem.has(d.value)).length;
       this._secEl.innerHTML = `
         <summary>Seções (${secs.length}) — cada seção é um dispositivo</summary>
         <style>${editorCss}</style>
+        <div class="filtro"><label><span>Mostrar dispositivos com</span>
+          <select data-filtro="1">${fOpts}</select></label>
+          <div class="conta">${devs.length} dispositivo${devs.length === 1 ? "" : "s"}${
+            fora ? ` · ${fora} fora do filtro, mantido${fora === 1 ? "" : "s"} por já estar${fora === 1 ? "" : "em"} em uso` : ""
+          }</div>${escondidos ? `<div class="dica">${escondidos} outro${escondidos === 1 ? "" : "s"} serve${escondidos === 1 ? "" : "m"} às faixas deste card — troque para «As grandezas deste card» para ver.</div>` : ""}</div>
         ${rows}
         <button class="add" data-add-sec="1">+ adicionar seção</button>`;
-      this._secEl.querySelectorAll("details.adv").forEach((d, i) => { d.open = !!abertos[i]; });
+      const selF = this._secEl.querySelector("select[data-filtro]");
+      if (selF) {
+        selF.addEventListener("change", () => {
+          this._config = { ...this._config, device_filter: selF.value };
+          this._emit();
+          this._sigSec = null;
+          this._paint("sections");
+        });
+      }
+      // O que estava aberto continua aberto — e quem abre depois recebe os
+      // selects na hora, montados só para aquela seção.
+      this._secEl.querySelectorAll("details.adv").forEach((d, i) => {
+        d.open = this._abertos.has(i);
+        d.addEventListener("toggle", () => {
+          if (d.open) {
+            this._abertos.add(i);
+            const caixa = d.querySelector(".ents");
+            if (caixa && !caixa.innerHTML.trim()) {
+              caixa.innerHTML = this._selectsDeEntidade((this._config.sections || [])[i] || {}, i);
+              caixa.querySelectorAll("select[data-sec]").forEach((el) => {
+                el.addEventListener("change", () =>
+                  this._secFieldChanged(Number(el.dataset.sec), el.dataset.field, el.dataset.metric, el.value));
+              });
+            }
+          } else this._abertos.delete(i);
+        });
+      });
       this._secEl.querySelectorAll("select[data-sec], input[data-sec]").forEach((el) => {
         el.addEventListener("change", () =>
           this._secFieldChanged(Number(el.dataset.sec), el.dataset.field, el.dataset.metric, el.value));
@@ -1707,12 +2267,69 @@
       this._form.data = data;
     }
 
+    // Os selects de entidade de UMA seção. Chamado na pintura só para as
+    // seções abertas, e no `toggle` para a que o dono acabou de abrir.
+    _selectsDeEntidade(s, i) {
+      const hass = this._hass;
+      if (!hass) return "";
+      // `ownSensors` varre o registro inteiro; sem esta memória ele seria
+      // refeito uma vez por grandeza, para o mesmo dispositivo.
+      const own = ownSensors(hass, s.device);
+      return usedMetrics(this._config).map((m) => {
+        const key = ENTITY_KEY[m];
+        const cur = (s.entities && s.entities[m]) || (key ? s[key] : "") || "";
+        const { proprias, fora } = sensorsFor(hass, s.device, m, { own });
+        // O que a descoberta automática ESCOLHEU, escrito na própria opção.
+        // Sem isso o dono vê "— automático —" e não sabe se achou alguma
+        // coisa: a diferença entre uma célula pintada e uma cinza fica
+        // invisível até ele olhar a tela.
+        const achado = autoEntity(hass, s.device, m);
+        const rotAuto = achado
+          ? `— automático: ${friendly(hass, achado)} —`
+          : "— automático: nada neste dispositivo —";
+        const opt = (e) => `<option value="${esc(e.value)}"${e.value === cur ? " selected" : ""}>${esc(e.label)}</option>`;
+        const grupo = (rot, lista) => (lista.length
+          ? `<optgroup label="${esc(rot)}">${lista.map(opt).join("")}</optgroup>` : "");
+        const corpo = grupo("Deste dispositivo", proprias)
+          + grupo("Fora deste dispositivo", fora);
+        const vazio = !proprias.length && !fora.length
+          ? `<option value="" disabled>nenhum sensor de ${esc(METRICS[m].label.toLowerCase())} na casa</option>` : "";
+        return `<label class="ent${achado || cur ? "" : " sem"}"><span>${esc(METRICS[m].label)}</span>
+          <select data-sec="${i}" data-metric="${esc(m)}">
+            <option value=""${cur ? "" : " selected"}>${esc(rotAuto)}</option>${corpo}${vazio}
+          </select></label>`;
+      }).join("");
+    }
+
+    // A lista de dispositivos do editor, já filtrada — com uma rede de
+    // segurança: dispositivo JÁ ESCOLHIDO numa seção entra na lista mesmo que
+    // o filtro o excluísse. Sem isso, trocar o filtro esvaziaria o select de
+    // uma seção montada e o dono perderia a escolha dele sem pedir nada.
+    _dispositivos() {
+      const hass = this._hass;
+      if (!hass) return [];
+      const f = String(this._config.device_filter || DEFAULTS.device_filter);
+      const disponiveis = deviceFilters();
+      const def = disponiveis.find((x) => x.value === f) || disponiveis[0];
+      const metrics = def.metrics === null ? usedMetrics(this._config) : def.metrics;
+      const lista = metrics === "*" ? todosDispositivos(hass) : metricDevices(hass, metrics);
+      const tem = new Set(lista.map((d) => d.value));
+      const faltando = (this._config.sections || [])
+        .map((s) => s.device)
+        .filter((d) => d && !tem.has(d))
+        .map((d) => ({ value: d, label: `${deviceName(hass, d)} — fora do filtro`, fora: true }));
+      return faltando.length
+        ? lista.concat(faltando).sort((a, b) => a.label.localeCompare(b.label, "pt-BR"))
+        : lista;
+    }
+
     // A decisão de um campo de faixa, separada do DOM: é ela que o probe
     // consegue exercitar (o dublê de DOM da bancada não devolve elementos).
     _bandFieldChanged(i, campo, v) {
       const bands2 = this._config.bands.map((x) => ({ ...x }));
       if (!bands2[i]) return;
       if (v === "") delete bands2[i][campo];
+      else if (campo === "confirm") bands2[i][campo] = true;
       else bands2[i][campo] = (campo === "height" || campo === "max") ? Number(v) : v;
       // Grandeza nova zera os parâmetros da antiga: o `max` de um circuito de
       // corrente não quer dizer nada numa faixa de tensão, e ficaria no YAML
@@ -1721,6 +2338,7 @@
         delete bands2[i].max;
         delete bands2[i].nominal;
         delete bands2[i].scale;
+        delete bands2[i].confirm;
       }
       this._config = { ...this._config, bands: bands2 };
       this._emit();
@@ -1839,6 +2457,17 @@
 
   const editorCss = `
     summary{cursor:pointer;font-weight:500;}
+  .filtro{margin:2px 0 10px;}
+  .filtro label{display:flex;align-items:center;gap:8px;font-size:12px;
+    color:var(--secondary-text-color);}
+  .filtro label span{white-space:nowrap;}
+  .filtro select{flex:1;min-width:0;}
+  .filtro .conta{font-size:11px;opacity:.65;margin:3px 0 0 2px;}
+  .filtro .dica{font-size:11px;margin:3px 0 0 2px;color:var(--warning-color,#ffa600);}
+  /* Grandeza sem nenhum sensor naquele dispositivo: o rótulo avisa, em vez
+     de deixar o dono descobrir pela célula cinza na tela. */
+  .ent.sem > span{color:var(--warning-color,#ffa600);}
+  .ent.sem > span::after{content:" · sem sensor";font-size:10px;opacity:.8;}
   .xtra{display:flex;gap:6px;margin:4px 0 2px 26px;}
   .xtra label{display:flex;align-items:center;gap:6px;flex:1;font-size:12px;
     color:var(--secondary-text-color);}
@@ -1853,13 +2482,26 @@
     .head input[type=number]{width:74px;}
     select,input{background:var(--card-background-color);color:var(--primary-text-color);
       border:1px solid var(--divider-color);border-radius:6px;padding:4px 6px;font-size:13px;}
+    /* Placeholder do tema é claro demais sobre o cartão: no papel creme e no
+       grafite ele sumia, e "nome (opcional)" parecia campo desabilitado. */
+    input::placeholder{color:var(--secondary-text-color);opacity:.7;}
     button{background:none;border:1px solid var(--divider-color);border-radius:6px;
-      color:var(--primary-text-color);cursor:pointer;padding:3px 7px;font-size:12px;}
+      color:var(--primary-text-color);cursor:pointer;padding:3px 7px;font-size:12px;
+      line-height:1;transition:background-color .12s,border-color .12s,color .12s;}
+    button:hover{background:var(--divider-color);}
+    /* Remover é destrutivo e não pode parecer irmão de subir/descer: só a cor
+       muda, e só ao passar o ponteiro — para não virar um card cheio de
+       vermelho parado. */
+    button[data-del]:hover,button[data-bdel]:hover{
+      background:var(--error-color,#db4437);border-color:var(--error-color,#db4437);color:#fff;}
+    button:focus-visible{outline:2px solid var(--primary-color,#03a9f4);outline-offset:1px;}
     button.add{margin-top:8px;width:100%;padding:6px;}
     .adv{margin:4px 0 0 20px;}
     .adv summary{font-size:12px;opacity:.7;font-weight:400;}
     .ents{display:grid;grid-template-columns:1fr;gap:4px;padding:4px 0;}
-    .ent{display:grid;grid-template-columns:110px 1fr;gap:6px;align-items:center;font-size:12px;}
+    /* 132px porque o rótulo pode ganhar o aviso "· sem sensor"; com 110 ele
+       quebrava em duas linhas e desalinhava a fileira inteira. */
+    .ent{display:grid;grid-template-columns:132px 1fr;gap:6px;align-items:center;font-size:12px;}
     .ent select{min-width:0;}
     .crow{display:grid;grid-template-columns:1fr 44px 110px minmax(110px,1fr);gap:10px;
       align-items:center;padding:6px 0;}
